@@ -276,6 +276,7 @@ export function EditStudentModal({ student, onClose, onUpdated }) {
       });
       setShowConfirmModal(false);
       setError(null);
+
     }
   }, [student]);
 
@@ -374,6 +375,7 @@ export function EditStudentModal({ student, onClose, onUpdated }) {
       }
 
       setShowConfirmModal(false);
+
       onUpdated();
       onClose();
     } catch (err) {
