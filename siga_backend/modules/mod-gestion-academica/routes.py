@@ -494,15 +494,17 @@ async def obtener_boletin(estudiante_id: int, periodo_id: Optional[int] = None, 
 
     result_plan = await db.execute(
         text("""
-            SELECT p.creditos_totales, p.nombre as plan_nombre, p.nivel_formativo, pr.plan_estudio_id
+            SELECT pr.nombre as programa_nombre, p.creditos_totales, p.nombre as plan_nombre,
+                   p.nivel_formativo, pr.plan_estudio_id
             FROM programas_estudio pr
-            JOIN planes_estudio p ON pr.plan_estudio_id = p.id
+            LEFT JOIN planes_estudio p ON pr.plan_estudio_id = p.id
             WHERE pr.id = :prog_id
         """),
         {"prog_id": estudiante.programa_id}
     )
+    # LEFT JOIN: una carrera sin plan importado sigue mostrando su nombre en el boletín.
     plan_row = result_plan.mappings().first()
-    creditos_totales = plan_row["creditos_totales"] if plan_row else 0
+    creditos_totales = (plan_row["creditos_totales"] or 0) if plan_row else 0
 
     result_creditos_aprob = await db.execute(
         text("""
@@ -604,7 +606,7 @@ async def obtener_boletin(estudiante_id: int, periodo_id: Optional[int] = None, 
             "dni": estudiante.dni,
             "celular": estudiante.celular,
             "email_personal": estudiante.email_personal,
-            "programa_nombre": plan_row["plan_nombre"] if plan_row else None,
+            "programa_nombre": (plan_row["programa_nombre"] or plan_row["plan_nombre"]) if plan_row else None,
             "periodo_codigo": periodo_codigo,
             "fecha_emision": datetime.utcnow().strftime("%d/%m/%Y"),
         },
