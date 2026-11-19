@@ -5,6 +5,7 @@ import { API_BASE } from '../../core/api/client';
 import { usePrograms } from '../../core/api/usePrograms';
 import { filtrarEstudiantes } from '../../core/studentSearch';
 import { useToast } from '../../core/ui/ToastContext';
+import { useConfirm } from '../../core/ui/ConfirmModal';
 import techBg from '../../assets/tech-bg.jpg';
 import { EditStudentModal } from './EditStudentModal';
 import { StudentDetail } from './StudentDetail';
@@ -526,6 +527,7 @@ function ProgramaFilter({ programas: PROGRAMAS, value, onChange }) {
 export function StudentMaster() {
   const { user } = useAuth();
   const toast = useToast();
+  const confirmar = useConfirm(); // los avisos (toast) no tienen confirmación; se usa el modal
   const { PROGRAMAS, PROGRAMAS_OPTIONS, getProgramaLabel, compareStudents } = useProgramasCatalogo();
   const userRoles = user?.roles ? user.roles.map(r => typeof r === 'string' ? r : r.nombre || r.name) : [];
   const primaryRole = user?.is_superuser ? 'superadmin' : (userRoles.length > 0 ? userRoles[0] : (user?.role || 'invitado'));
@@ -886,7 +888,7 @@ export function StudentMaster() {
       return;
     }
 
-    const ok = await toast.confirm({
+    const ok = await confirmar({
       title: 'Sincronizar Admisión',
       message: '¿Sincronizar lista de ingresantes desde el módulo de Admisión?',
       type: 'info',
@@ -900,11 +902,11 @@ export function StudentMaster() {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
 
-      if (!resAdmision.ok) throw new Error("No se pudo conectar con Admisión Piloto");
+      if (!resAdmision.ok) throw new Error("No se pudo conectar con el módulo de Admisión.");
       let admisionData = await resAdmision.json();
 
-      if (admisionData.admitidos.length === 0) {
-        toast.info("No se encontraron ingresantes para el programa seleccionado.");
+      if (!admisionData.admitidos?.length) {
+        toast.info("El módulo de Admisión no tiene ingresantes cargados. Primero sube el Excel de resultados en Administración → Admisión.");
         setLoading(false);
         return;
       }
@@ -920,7 +922,10 @@ export function StudentMaster() {
 
       if (resIngesta.ok) {
         const result = await resIngesta.json();
-        toast.success(`Sincronización exitosa. ${result.estudiantes_creados} nuevos estudiantes ingresados al Core.`);
+        const total = admisionData.admitidos.length;
+        toast.success(result.estudiantes_creados > 0
+          ? `Sincronización exitosa: ${result.estudiantes_creados} nuevos estudiantes registrados (de ${total} ingresantes).`
+          : `Sincronización completa: los ${total} ingresantes de Admisión ya estaban registrados; no hay nuevos.`);
         handleSearch('');
       } else {
         const err = await resIngesta.text();
