@@ -17,7 +17,9 @@ export function LoginForm() {
     setLoading(true);
     setError('');
 
-    const result = await login(form.email, form.password);
+    // Al copiar/pegar o con el autocompletado se cuelan espacios o una mayúscula inicial,
+    // y el servidor compara exacto: se limpian antes de enviar.
+    const result = await login(form.email.trim().toLowerCase(), form.password.trim());
 
     if (!result.success) {
       setError(result.error);
