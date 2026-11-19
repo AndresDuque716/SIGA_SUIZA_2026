@@ -233,6 +233,20 @@ async def asegurar_esquema_tesoreria():
     """Columnas agregadas después de crear las tablas (create_all no altera tablas existentes)."""
     async with engine.begin() as conn:
         await conn.execute(text("ALTER TABLE IF EXISTS tesoreria_pagos ADD COLUMN IF NOT EXISTS qr_contenido TEXT"))
+        # La carrera de cada recibo debe coincidir con la del alumno (la misma que ve Registro de
+        # Estudiantes). Antes la pantalla enviaba una carrera de una lista con ids viejos.
+        # No afecta a los QR ya impresos: llevan sus propios datos firmados dentro del enlace.
+        existen = (await conn.execute(text(
+            "SELECT to_regclass('public.tesoreria_pagos') IS NOT NULL AND to_regclass('public.programas_estudio') IS NOT NULL"
+        ))).scalar()
+        if existen:
+            corregidos = await conn.execute(text("""
+                UPDATE tesoreria_pagos p SET carrera_nombre = pe.nombre
+                FROM estudiantes e JOIN programas_estudio pe ON pe.id = e.programa_id
+                WHERE p.estudiante_id = e.id AND p.carrera_nombre IS DISTINCT FROM pe.nombre
+            """))
+            if corregidos.rowcount:
+                print(f"Tesorería: carrera corregida en {corregidos.rowcount} recibo(s) según la ficha del alumno")
 
 
 # ---------------------------------------------------------------------------
@@ -441,6 +455,13 @@ async def siguiente_codigo_recibo(db: AsyncSession) -> str:
     return f"{prefijo}{(max(numeros) if numeros else 0) + 1:05d}"
 
 
+async def nombre_carrera(db: AsyncSession, programa_id: Optional[int]) -> Optional[str]:
+    """Nombre de la carrera según la base de datos (fuente de verdad para recibos y estados de cuenta)."""
+    if not programa_id:
+        return None
+    return (await db.execute(text("SELECT nombre FROM programas_estudio WHERE id = :p"), {"p": programa_id})).scalar()
+
+
 async def construir_estado_cuenta(db: AsyncSession, est: Estudiante, secreto: bytes) -> dict:
     """Movimientos del año: admisión, recibos de caja y la matrícula (pagada o pendiente)."""
     conceptos = await conceptos_activos(db)
@@ -514,6 +535,7 @@ async def construir_estado_cuenta(db: AsyncSession, est: Estudiante, secreto: by
         "estudiante": {
             "id": est.id, "dni": est.dni, "nombres": est.nombres, "apellidos": est.apellidos,
             "codigo_estudiante": est.codigo_estudiante, "programa_id": est.programa_id,
+            "programa_nombre": await nombre_carrera(db, est.programa_id),
             "modalidad_admision": est.modalidad_admision, "pago_matricula": bool(est.pago_matricula),
         },
         "movimientos": movimientos,
@@ -701,7 +723,9 @@ async def registrar_pago(data: PagoIn, request: Request, db: AsyncSession = Depe
     pago = PagoCaja(
         codigo_recibo=await siguiente_codigo_recibo(db),
         estudiante_id=est.id, dni=est.dni, estudiante_nombre=f"{est.nombres} {est.apellidos}",
-        codigo_estudiante=est.codigo_estudiante, carrera_nombre=data.carreraNombre,
+        # La carrera del recibo sale de la ficha del alumno, no de lo que envíe la pantalla.
+        codigo_estudiante=est.codigo_estudiante,
+        carrera_nombre=(await nombre_carrera(db, est.programa_id)) or data.carreraNombre,
         concepto_id=concepto.id, concepto_codigo=concepto.codigo, concepto_nombre=concepto.nombre,
         concepto_categoria=concepto.categoria, tipo_precio=concepto.tipo_precio, tarifa_nombre=tarifa_nombre,
         monto=monto, metodo_pago_id=data.metodoPagoId, metodo_pago_nombre=METODOS_PAGO[data.metodoPagoId],
