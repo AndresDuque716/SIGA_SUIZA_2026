@@ -663,12 +663,61 @@ async def actualizar_estudiante(estudiante_id: int, data: EstudianteUpdate, requ
     await db.refresh(db_estudiante)
     return db_estudiante
 
+# Registros que dependen de un estudiante: (nombre, SQL para contarlos, SQL para borrarlos).
+# El orden importa: primero lo que apunta a matrículas/resoluciones y al final esas tablas.
+_SUB_MATRICULAS = "SELECT id FROM matriculas WHERE estudiante_id = :e"
+_SUB_DETALLES = f"SELECT id FROM matricula_detalles WHERE matricula_id IN ({_SUB_MATRICULAS})"
+_REGISTROS_ESTUDIANTE = [
+    ("notas", "evaluacion_registros",
+     f"estudiante_id = :e OR matricula_detalle_id IN ({_SUB_DETALLES})"),
+    ("pagos de Caja", "tesoreria_pagos", f"estudiante_id = :e OR matricula_id IN ({_SUB_MATRICULAS})"),
+    ("cursos matriculados", "matricula_detalles", f"matricula_id IN ({_SUB_MATRICULAS})"),
+    ("matrículas", "matriculas", "estudiante_id = :e"),
+    ("cursos convalidados", "convalidaciones_detalle",
+     "resolucion_id IN (SELECT id FROM resoluciones_convalidacion WHERE estudiante_id = :e)"),
+    ("resoluciones de convalidación", "resoluciones_convalidacion", "estudiante_id = :e"),
+    ("trámites", "solicitudes_tramites", "estudiante_id = :e"),
+    ("historial académico", "historial_academico", "estudiante_id = :e"),
+    ("beneficios", "beneficios_estudiante", "estudiante_id = :e"),
+    ("prácticas", "registros_practicas", "estudiante_id = :e"),
+]
+
+
+async def _contar_registros_estudiante(db: AsyncSession, estudiante_id: int) -> dict:
+    conteo = {}
+    for nombre, tabla, condicion in _REGISTROS_ESTUDIANTE:
+        existe = (await db.execute(text("SELECT to_regclass(:t)"), {"t": f"public.{tabla}"})).scalar()
+        if not existe:
+            continue
+        total = (await db.execute(text(f"SELECT count(*) FROM {tabla} WHERE {condicion}"), {"e": estudiante_id})).scalar()
+        if total:
+            conteo[nombre] = total
+    return conteo
+
+
 @router.delete("/estudiantes/{estudiante_id}")
-async def eliminar_estudiante(estudiante_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+async def eliminar_estudiante(estudiante_id: int, request: Request, eliminar_registros: bool = False,
+                              db: AsyncSession = Depends(get_db)):
+    """Elimina un estudiante. Si tiene matrículas, pagos, notas u otros registros, solo se
+    elimina con `eliminar_registros=true`, que borra también esos registros."""
     result = await db.execute(select(Estudiante).where(Estudiante.id == estudiante_id))
     db_estudiante = result.scalar_one_or_none()
     if not db_estudiante:
         raise HTTPException(status_code=404, detail="Estudiante no encontrado")
+
+    registros = await _contar_registros_estudiante(db, estudiante_id)
+    if registros and not eliminar_registros:
+        detalle = ", ".join(f"{n} {nombre}" for nombre, n in registros.items())
+        raise HTTPException(
+            status_code=409,
+            detail=f"El estudiante tiene registros asociados ({detalle}). "
+                   "Para eliminarlo junto con esos registros use eliminar_registros=true.",
+        )
+    if registros:
+        for _nombre, tabla, condicion in _REGISTROS_ESTUDIANTE:
+            existe = (await db.execute(text("SELECT to_regclass(:t)"), {"t": f"public.{tabla}"})).scalar()
+            if existe:
+                await db.execute(text(f"DELETE FROM {tabla} WHERE {condicion}"), {"e": estudiante_id})
 
     await db.delete(db_estudiante)
 
@@ -678,7 +727,7 @@ async def eliminar_estudiante(estudiante_id: int, request: Request, db: AsyncSes
         "source": "mod-gestion-academica",
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "version": "1.0.0",
-        "data": {"id": estudiante_id},
+        "data": {"id": estudiante_id, "dni": db_estudiante.dni, "registros_eliminados": registros},
         "metadata": {"request_id": request.headers.get("X-Request-ID", "unknown")}
     }
     
