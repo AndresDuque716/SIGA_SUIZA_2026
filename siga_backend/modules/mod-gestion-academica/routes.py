@@ -670,7 +670,9 @@ _SUB_DETALLES = f"SELECT id FROM matricula_detalles WHERE matricula_id IN ({_SUB
 _REGISTROS_ESTUDIANTE = [
     ("notas", "evaluacion_registros",
      f"estudiante_id = :e OR matricula_detalle_id IN ({_SUB_DETALLES})"),
-    ("pagos de Caja", "tesoreria_pagos", f"estudiante_id = :e OR matricula_id IN ({_SUB_MATRICULAS})"),
+    # Solo estudiante_id: es la columna del modelo. Algunas bases locales tienen además
+    # matricula_id, pero en Railway no existe y la consulta fallaba.
+    ("pagos de Caja", "tesoreria_pagos", "estudiante_id = :e"),
     ("cursos matriculados", "matricula_detalles", f"matricula_id IN ({_SUB_MATRICULAS})"),
     ("matrículas", "matriculas", "estudiante_id = :e"),
     ("cursos convalidados", "convalidaciones_detalle",
