@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { UserCog, Users } from 'lucide-react';
 import { apiClient } from '../../core/api/client';
 import { SectionInfoBlock } from './SectionInfoBlock';
+import { usePrograms } from '../../core/api/usePrograms';
+import { filtrarEstudiantes } from '../../core/studentSearch';
 
 const TIPOS = [
   { id: 'Ingresante', tone: 'bg-sky-100 text-sky-700 border-sky-200', icon: '🆕' },
@@ -41,23 +43,18 @@ export function TiposAlumnosPanel() {
   const resumen = data?.resumen || {};
   const total = resumen.total || 0;
 
+  // Carreras que tienen alumnos, con su nombre real (no "Programa 3").
+  const catalogo = usePrograms();
+  const nombreCarrera = (id) => catalogo.find((p) => String(p.id) === String(id))?.nombre || `Programa ${id}`;
   const programas = [...new Set(estudiantes.map((e) => e.programa_id).filter(Boolean))]
-    .sort((a, b) => a - b);
+    .map((id) => ({ id, nombre: nombreCarrera(id) }))
+    .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
 
-  const filtrados = estudiantes.filter((e) => {
-    if (tipoFiltro && e.tipo_alumno !== tipoFiltro) return false;
-    if (programaFiltro && String(e.programa_id) !== String(programaFiltro)) return false;
-    if (search.trim().length >= 2) {
-      const q = search.trim().toLowerCase();
-      return (
-        (e.dni || '').includes(q) ||
-        (e.nombres || '').toLowerCase().includes(q) ||
-        (e.apellidos || '').toLowerCase().includes(q) ||
-        (e.codigo_estudiante || '').toLowerCase().includes(q)
-      );
-    }
-    return true;
-  });
+  const filtrados = filtrarEstudiantes(
+    estudiantes.filter((e) => !tipoFiltro || e.tipo_alumno === tipoFiltro),
+    search,
+    programaFiltro
+  );
 
   const toneDe = (tipo) => TIPOS.find((t) => t.id === tipo)?.tone || 'bg-slate-100 text-slate-600 border-slate-200';
 
@@ -115,7 +112,7 @@ export function TiposAlumnosPanel() {
         >
           <option value="">Todos los programas</option>
           {programas.map((p) => (
-            <option key={p} value={p}>Programa {p}</option>
+            <option key={p.id} value={p.id}>{p.nombre}</option>
           ))}
         </select>
         {(tipoFiltro || programaFiltro || search) && (

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useAuth } from '../../core/auth/useAuth';
 import { API_BASE } from '../../core/api/client';
 import { usePrograms } from '../../core/api/usePrograms';
+import { filtrarEstudiantes } from '../../core/studentSearch';
 import { useToast } from '../../core/ui/ToastContext';
 import techBg from '../../assets/tech-bg.jpg';
 import { EditStudentModal } from './EditStudentModal';
@@ -539,6 +540,8 @@ export function StudentMaster() {
   const [wizardStep, setWizardStep] = useState(1);
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [currentPrograma, setCurrentPrograma] = useState('ALL');
+  // Secretaría de Programa trabaja solo con su carrera; el resto elige.
+  const carreraFija = userRole === 'secretaria_programa' && user?.programa_id != null;
   const [stepDir, setStepDir] = useState('forward');
   const [loadError, setLoadError] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -612,9 +615,8 @@ export function StudentMaster() {
 
   useEffect(() => {
     if (userRole !== 'invitado') {
-      if (userRole === 'secretaria_programa' && currentPrograma === 'ALL') {
-        const fallbackId = user?.email === 'secretaria_prog@siga.edu' ? '2' : '1';
-        setCurrentPrograma(user?.programa_id ? String(user.programa_id) : fallbackId);
+      if (carreraFija && currentPrograma === 'ALL') {
+        setCurrentPrograma(String(user.programa_id));
       } else {
         handleSearch(searchTerm);
       }
@@ -677,19 +679,8 @@ export function StudentMaster() {
       const sorted = [...dataArray].sort(compareStudentsByCarrera);
 
       const term = String(val || '').trim();
-      if (term.length >= 3) {
-        const lowerTerm = term.toLowerCase();
-        const filtered = sorted.filter(s => {
-          const dni = String(s.dni ?? '');
-          const nombres = String(s.nombres ?? '').toLowerCase();
-          const apellidos = String(s.apellidos ?? '').toLowerCase();
-          const codigo = String(s.codigo_estudiante ?? '');
-          return dni.includes(term)
-            || nombres.includes(lowerTerm)
-            || apellidos.includes(lowerTerm)
-            || codigo.includes(term);
-        });
-        setStudents(filtered);
+      if (term.length >= 2) {
+        setStudents(filtrarEstudiantes(sorted, term));
       } else {
         setStudents(sorted);
       }
@@ -833,8 +824,11 @@ export function StudentMaster() {
       // Garantizar asignación obligatoria de programa_id
       const assignedProg = form.programa_id
         || (currentPrograma && currentPrograma !== 'ALL' ? currentPrograma : null)
-        || (user?.programa_id ? String(user.programa_id) : null)
-        || (user?.email === 'secretaria_prog@siga.edu' ? '2' : '1');
+        || (user?.programa_id ? String(user.programa_id) : null);
+      if (!assignedProg) {
+        toast.warning('Selecciona la carrera del estudiante antes de registrarlo.');
+        return;
+      }
       payload.programa_id = parseInt(assignedProg, 10);
 
       const res = await fetch(`${API_BASE}/api/mod-gestion-academica/estudiantes/`, {
@@ -1306,7 +1300,7 @@ export function StudentMaster() {
       </div>
 
       <div className="glass-card p-3 mb-6 flex flex-col md:flex-row md:items-center gap-3 relative z-30 lg:shrink-0">
-        {['superadmin', 'admin', 'secretaria_academica', 'admin_admision'].includes(userRole) && (
+        {!carreraFija && (
           <ProgramaFilter programas={PROGRAMAS} value={currentPrograma} onChange={setCurrentPrograma} />
         )}
         <div className="group flex-1 flex items-center gap-3 h-[56px] pl-3 pr-3 rounded-xl border-2 border-slate-200 bg-white shadow-md transition-all duration-200 focus-within:border-primary/60 focus-within:ring-4 focus-within:ring-primary/15 focus-within:shadow-lg focus-within:shadow-primary/10">

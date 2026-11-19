@@ -6,6 +6,7 @@ import {
 import { API_BASE } from '../../core/api/client';
 import { usePrograms } from '../../core/api/usePrograms';
 import { useAuth } from '../../core/auth/useAuth';
+import { filtrarEstudiantes } from '../../core/studentSearch';
 import { EnrollmentProcess } from './EnrollmentProcess';
 import { EnrollmentFlowDiagram } from './EnrollmentFlowDiagram';
 import { AdmissionPanel } from './AdmissionPanel';
@@ -32,6 +33,8 @@ export function EnrollmentDashboard() {
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPrograma, setCurrentPrograma] = useState('ALL');
+  // Secretaría de Programa trabaja solo con su carrera; el resto elige.
+  const carreraFija = userRole === 'secretaria_programa' && user?.programa_id != null;
 
 
   const fetchStudents = async (searchVal = searchTerm) => {
@@ -48,13 +51,8 @@ export function EnrollmentDashboard() {
       const data = await response.json();
       
       let finalData = Array.isArray(data) ? data : [];
-      if (searchVal.length >= 3) {
-        finalData = finalData.filter(s => 
-          (s.dni && s.dni.includes(searchVal)) || 
-          (s.nombres && s.nombres.toLowerCase().includes(searchVal.toLowerCase())) || 
-          (s.apellidos && s.apellidos.toLowerCase().includes(searchVal.toLowerCase())) || 
-          (s.codigo_estudiante && s.codigo_estudiante.includes(searchVal))
-        );
+      if (searchVal.trim().length >= 2) {
+        finalData = filtrarEstudiantes(finalData, searchVal);
       }
       setStudents(finalData);
     } catch (error) {
@@ -66,9 +64,8 @@ export function EnrollmentDashboard() {
 
   useEffect(() => {
     if (userRole !== 'invitado') {
-      if (userRole === 'secretaria_programa' && currentPrograma === 'ALL') {
-        const fallbackId = user?.email === 'secretaria_prog@siga.edu' ? '2' : '1';
-        setCurrentPrograma(user?.programa_id ? String(user.programa_id) : fallbackId);
+      if (carreraFija && currentPrograma === 'ALL') {
+        setCurrentPrograma(String(user.programa_id));
       } else {
         fetchStudents();
       }
@@ -214,7 +211,7 @@ export function EnrollmentDashboard() {
       />
 
       <div className="glass-card p-2 mb-8 flex items-center max-w-3xl gap-2">
-        {['superadmin', 'admin'].includes(userRole) && (
+        {!carreraFija && (
           <select 
             className="input-field py-3 text-sm bg-slate-50 border-none w-48 font-bold text-primary"
             value={currentPrograma}
