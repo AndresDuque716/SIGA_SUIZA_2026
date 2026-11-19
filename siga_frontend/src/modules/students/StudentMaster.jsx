@@ -432,17 +432,15 @@ function useProgramasCatalogo() {
     const programa = PROGRAMAS.find(item => item.id === String(programaId));
     return programa ? programa.label : 'Sin carrera seleccionada';
   };
-  const compareStudentsByCarrera = (a, b) => {
-    const carreraA = a.programa_id ? getProgramaLabel(a.programa_id) : '';
-    const carreraB = b.programa_id ? getProgramaLabel(b.programa_id) : '';
-    if (!carreraA !== !carreraB) return carreraA ? -1 : 1;
-    const porCarrera = carreraA.localeCompare(carreraB, 'es', { sensitivity: 'base' });
-    if (porCarrera !== 0) return porCarrera;
+  // Orden alfabético por apellidos. Antes se agrupaba por carrera y, con "Todos los
+  // Programas", la primera página quedaba llena con una sola carrera (la primera
+  // alfabéticamente), como si todos los alumnos fueran de ella.
+  const compareStudents = (a, b) => {
     const porApellidos = String(a.apellidos ?? '').localeCompare(String(b.apellidos ?? ''), 'es', { sensitivity: 'base' });
     if (porApellidos !== 0) return porApellidos;
     return String(a.nombres ?? '').localeCompare(String(b.nombres ?? ''), 'es', { sensitivity: 'base' });
   };
-  return { PROGRAMAS, PROGRAMAS_OPTIONS, getProgramaLabel, compareStudentsByCarrera };
+  return { PROGRAMAS, PROGRAMAS_OPTIONS, getProgramaLabel, compareStudents };
 }
 
 function ProgramaFilter({ programas: PROGRAMAS, value, onChange }) {
@@ -528,7 +526,7 @@ function ProgramaFilter({ programas: PROGRAMAS, value, onChange }) {
 export function StudentMaster() {
   const { user } = useAuth();
   const toast = useToast();
-  const { PROGRAMAS, PROGRAMAS_OPTIONS, getProgramaLabel, compareStudentsByCarrera } = useProgramasCatalogo();
+  const { PROGRAMAS, PROGRAMAS_OPTIONS, getProgramaLabel, compareStudents } = useProgramasCatalogo();
   const userRoles = user?.roles ? user.roles.map(r => typeof r === 'string' ? r : r.nombre || r.name) : [];
   const primaryRole = user?.is_superuser ? 'superadmin' : (userRoles.length > 0 ? userRoles[0] : (user?.role || 'invitado'));
   const userRole = primaryRole;
@@ -676,7 +674,7 @@ export function StudentMaster() {
 
       const data = await res.json();
       const dataArray = Array.isArray(data) ? data : [];
-      const sorted = [...dataArray].sort(compareStudentsByCarrera);
+      const sorted = [...dataArray].sort(compareStudents);
 
       const term = String(val || '').trim();
       if (term.length >= 2) {
@@ -1239,7 +1237,7 @@ export function StudentMaster() {
   const startIndex = totalStudents === 0 ? 0 : (safeCurrentPage - 1) * pageSize;
   const endIndex = Math.min(startIndex + pageSize, totalStudents);
   // Se ordena al mostrar porque las carreras pueden cargarse después que los alumnos
-  const paginatedStudents = [...students].sort(compareStudentsByCarrera).slice(startIndex, endIndex);
+  const paginatedStudents = [...students].sort(compareStudents).slice(startIndex, endIndex);
 
   return (
     <div className="animate-fade-in lg:flex lg:flex-col lg:flex-1 lg:min-h-0 lg:overflow-y-auto">
