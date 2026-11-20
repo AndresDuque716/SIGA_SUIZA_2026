@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends, status, Request, UploadFile, File
+from seguridad import acceso_estudiante, id_ficha_propia, identidad, solo_padron, solo_personal
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, text
@@ -199,7 +200,7 @@ async def crear_estudiante(request: Request, data: EstudianteCreate, db: AsyncSe
     await db.refresh(db_estudiante)
     return db_estudiante
 
-@router.get("/estudiantes/")
+@router.get("/estudiantes/", dependencies=[Depends(solo_padron)])
 async def obtener_estudiantes(programa_id: Optional[int] = None, db: AsyncSession = Depends(get_db)):
     import traceback
     try:
@@ -237,7 +238,7 @@ async def obtener_estudiantes(programa_id: Optional[int] = None, db: AsyncSessio
         print(f"[ERROR] obtener_estudiantes: {e}\n{tb}")
         return {"error": str(e), "type": type(e).__name__, "traceback": tb}
 
-@router.get("/estudiantes/siguiente-codigo")
+@router.get("/estudiantes/siguiente-codigo", dependencies=[Depends(solo_padron)])
 async def obtener_siguiente_codigo(db: AsyncSession = Depends(get_db)):
     """Devuelve el siguiente código de estudiante único del año actual (formato AAAA-000000)."""
     year = datetime.now().year
@@ -271,7 +272,19 @@ async def actualizar_pago_matricula(estudiante_id: int, request: Request, pagado
     await db.refresh(estudiante)
     return estudiante
 
-@router.get("/estudiantes/{estudiante_id}", response_model=EstudianteResponse)
+@router.get("/estudiantes/mi-ficha")
+async def mi_ficha(i=Depends(identidad), db: AsyncSession = Depends(get_db)):
+    """Ficha del alumno que inició sesión (se enlaza por correo). El estudiante ya no necesita
+    leer el padrón completo para encontrar la suya."""
+    estudiante_id = await id_ficha_propia(db, i)
+    if not estudiante_id:
+        raise HTTPException(status_code=404, detail="Tu cuenta no está vinculada a una ficha de estudiante.")
+    r = (await db.execute(select(Estudiante).where(Estudiante.id == estudiante_id))).scalar_one()
+    return {"id": r.id, "codigo_estudiante": r.codigo_estudiante, "dni": r.dni, "nombres": r.nombres,
+            "apellidos": r.apellidos, "programa_id": r.programa_id, "estado_academico": r.estado_academico}
+
+
+@router.get("/estudiantes/{estudiante_id}", response_model=EstudianteResponse, dependencies=[Depends(acceso_estudiante)])
 async def obtener_estudiante(estudiante_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Estudiante).where(Estudiante.id == estudiante_id))
     db_estudiante = result.scalar_one_or_none()
@@ -466,7 +479,7 @@ async def _periodo_por_defecto_boletin(db, estudiante_id):
 
     raise HTTPException(status_code=404, detail="No hay periodos academicos registrados")
 
-@router.get("/estudiantes/{estudiante_id}/boletin")
+@router.get("/estudiantes/{estudiante_id}/boletin", dependencies=[Depends(acceso_estudiante)])
 async def obtener_boletin(estudiante_id: int, periodo_id: Optional[int] = None, db: AsyncSession = Depends(get_db)):
     from sqlalchemy import text
 
@@ -782,17 +795,17 @@ async def realizar_matricula(request: Request, data: MatriculaCreate, db: AsyncS
     result = await db.execute(select(Matricula).options(selectinload(Matricula.detalles)).where(Matricula.id == db_matricula.id))
     return result.scalar_one()
 
-@router.get("/matriculas/", response_model=List[MatriculaResponse])
+@router.get("/matriculas/", response_model=List[MatriculaResponse], dependencies=[Depends(solo_personal)])
 async def obtener_matriculas(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Matricula).options(selectinload(Matricula.detalles)).order_by(Matricula.created_at.desc()))
     return result.scalars().all()
 
-@router.get("/matriculas/estudiante/{estudiante_id}", response_model=List[MatriculaResponse])
+@router.get("/matriculas/estudiante/{estudiante_id}", response_model=List[MatriculaResponse], dependencies=[Depends(acceso_estudiante)])
 async def obtener_matriculas_estudiante(estudiante_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Matricula).options(selectinload(Matricula.detalles)).where(Matricula.estudiante_id == estudiante_id).order_by(Matricula.created_at.desc()))
     return result.scalars().all()
 
-@router.get("/matriculas/unidad/{unidad_id}/periodo/{periodo_id}")
+@router.get("/matriculas/unidad/{unidad_id}/periodo/{periodo_id}", dependencies=[Depends(solo_personal)])
 async def obtener_estudiantes_por_unidad(unidad_id: int, periodo_id: int, db: AsyncSession = Depends(get_db)):
     query = (
         select(Estudiante, MatriculaDetalle.id.label("matricula_detalle_id"))
@@ -925,7 +938,7 @@ async def crear_tramite(data: SolicitudTramiteCreate, db: AsyncSession = Depends
     await db.refresh(db_tramite)
     return db_tramite
 
-@router.get("/tramites/", response_model=List[SolicitudTramiteResponse])
+@router.get("/tramites/", response_model=List[SolicitudTramiteResponse], dependencies=[Depends(solo_personal)])
 async def obtener_tramites(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(SolicitudTramite).order_by(SolicitudTramite.fecha_solicitud.desc()))
     return result.scalars().all()
@@ -968,7 +981,7 @@ async def registrar_convalidacion(data: ResolucionConvalidacionCreate, db: Async
     result = await db.execute(select(ResolucionConvalidacion).options(selectinload(ResolucionConvalidacion.detalles)).where(ResolucionConvalidacion.id == db_resolucion.id))
     return result.scalar_one()
 
-@router.get("/convalidaciones/", response_model=List[ResolucionConvalidacionResponse])
+@router.get("/convalidaciones/", response_model=List[ResolucionConvalidacionResponse], dependencies=[Depends(solo_personal)])
 async def listar_convalidaciones(db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(ResolucionConvalidacion)
@@ -977,7 +990,7 @@ async def listar_convalidaciones(db: AsyncSession = Depends(get_db)):
     )
     return result.scalars().all()
 
-@router.get("/convalidaciones/estudiante/{estudiante_id}", response_model=List[ResolucionConvalidacionResponse])
+@router.get("/convalidaciones/estudiante/{estudiante_id}", response_model=List[ResolucionConvalidacionResponse], dependencies=[Depends(acceso_estudiante)])
 async def obtener_convalidaciones_estudiante(estudiante_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(ResolucionConvalidacion).options(selectinload(ResolucionConvalidacion.detalles)).where(ResolucionConvalidacion.estudiante_id == estudiante_id))
     return result.scalars().all()
@@ -992,7 +1005,7 @@ async def registrar_beneficio(data: BeneficioEstudianteCreate, db: AsyncSession 
     await db.refresh(db_beneficio)
     return db_beneficio
 
-@router.get("/beneficios/", response_model=List[BeneficioEstudianteResponse])
+@router.get("/beneficios/", response_model=List[BeneficioEstudianteResponse], dependencies=[Depends(solo_personal)])
 async def listar_beneficios(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(BeneficioEstudiante).order_by(BeneficioEstudiante.id.desc()))
     return result.scalars().all()
@@ -1008,7 +1021,7 @@ async def desactivar_beneficio(beneficio_id: int, db: AsyncSession = Depends(get
     await db.refresh(db_beneficio)
     return db_beneficio
 
-@router.get("/beneficios/estudiante/{estudiante_id}", response_model=List[BeneficioEstudianteResponse])
+@router.get("/beneficios/estudiante/{estudiante_id}", response_model=List[BeneficioEstudianteResponse], dependencies=[Depends(acceso_estudiante)])
 async def obtener_beneficios_estudiante(estudiante_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(BeneficioEstudiante).where(BeneficioEstudiante.estudiante_id == estudiante_id, BeneficioEstudiante.activo == True))
     return result.scalars().all()

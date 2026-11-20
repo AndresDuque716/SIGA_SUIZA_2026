@@ -20,6 +20,7 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from seguridad import acceso_estudiante, solo_padron, solo_personal
 from pydantic import BaseModel
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -452,7 +453,7 @@ async def matricular_ingresantes(
     }
 
 
-@router.get("/estudiantes/{estudiante_id}/ficha")
+@router.get("/estudiantes/{estudiante_id}/ficha", dependencies=[Depends(acceso_estudiante)])
 async def obtener_ficha(estudiante_id: int, db: AsyncSession = Depends(get_db)):
     """Ficha del estudiante (sección 1: "se genera la ficha")."""
     estudiante = (await db.execute(
@@ -496,7 +497,7 @@ async def obtener_ficha(estudiante_id: int, db: AsyncSession = Depends(get_db)):
 # Secciones 2, 3 y 5 — Motor: propuesta (ciclo, cursos, restricciones)
 # ---------------------------------------------------------------------------
 
-@router.get("/matriculas/propuesta")
+@router.get("/matriculas/propuesta", dependencies=[Depends(solo_personal)])
 async def propuesta_matricula(
     estudiante_id: int,
     programa_id: int,
@@ -532,7 +533,7 @@ async def propuesta_matricula(
 # Restricciones — Validación de créditos y reglas académicas
 # ---------------------------------------------------------------------------
 
-@router.get("/matriculas/restricciones")
+@router.get("/matriculas/restricciones", dependencies=[Depends(solo_personal)])
 async def restricciones_matricula(
     estudiante_id: int,
     programa_id: int,
@@ -624,7 +625,7 @@ async def restricciones_matricula(
 # Sección 2 — Tipos de alumnos históricos (invicto / jalado / histórico)
 # ---------------------------------------------------------------------------
 
-@router.get("/matriculas/tipos-alumnos")
+@router.get("/matriculas/tipos-alumnos", dependencies=[Depends(solo_padron)])
 async def tipos_alumnos(
     programa_id: Optional[int] = None,
     tipo: Optional[str] = None,
@@ -835,7 +836,7 @@ def _boleta_payload(matricula: Matricula) -> dict:
     }
 
 
-@router.get("/matriculas/boletas")
+@router.get("/matriculas/boletas", dependencies=[Depends(solo_personal)])
 async def listar_boletas(
     periodo_id: Optional[int] = None,
     programa_id: Optional[int] = None,
@@ -903,7 +904,7 @@ async def listar_boletas(
     }
 
 
-@router.get("/boletas/validar/{codigo}")
+@router.get("/boletas/validar/{codigo}", dependencies=[Depends(solo_personal)])
 async def validar_boleta(codigo: str, db: AsyncSession = Depends(get_db)):
     """Validación pública por escaneo del QR (alumno / secretaría)."""
     result = await db.execute(
@@ -987,7 +988,7 @@ async def consolidar_matricula(matricula_id: int, request: Request, db: AsyncSes
     return {"matricula_id": matricula.id, "pasos": pasos}
 
 
-@router.get("/matriculas/resultado")
+@router.get("/matriculas/resultado", dependencies=[Depends(solo_personal)])
 async def resultado_final(
     periodo_id: Optional[int] = None,
     programa_id: Optional[int] = None,
@@ -1058,7 +1059,7 @@ async def resultado_final(
 # Sección 8 — Historial académico y avance de créditos
 # ---------------------------------------------------------------------------
 
-@router.get("/estudiantes/{estudiante_id}/historial")
+@router.get("/estudiantes/{estudiante_id}/historial", dependencies=[Depends(acceso_estudiante)])
 async def historial_estudiante(estudiante_id: int, db: AsyncSession = Depends(get_db)):
     """Historial académico: matrículas + estados institucionales."""
     mats = (await db.execute(
@@ -1180,7 +1181,7 @@ async def _calcular_avance(db: AsyncSession, estudiante_id: int, programa_id: in
     }
 
 
-@router.get("/estudiantes/{estudiante_id}/avance")
+@router.get("/estudiantes/{estudiante_id}/avance", dependencies=[Depends(acceso_estudiante)])
 async def avance_estudiante(estudiante_id: int, programa_id: Optional[int] = None, db: AsyncSession = Depends(get_db)):
     """Avance de créditos y ciclo actual del estudiante (sección 8)."""
     est = (await db.execute(

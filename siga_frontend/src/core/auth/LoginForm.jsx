@@ -4,9 +4,10 @@ import { GraduationCap, Users, ClipboardList, MonitorSmartphone, Mail, Lock, Eye
 
 export function LoginForm() {
   const { login } = useAuth();
+  // Sin credenciales precargadas: el sitio es público.
   const [form, setForm] = useState({
-    email: 'admin@siga.edu',
-    password: 'admin123',
+    email: '',
+    password: '',
   });
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -93,7 +94,7 @@ export function LoginForm() {
                   type="email"
                   className="input-field pl-10"
                   id="email"
-                  placeholder="admin@siga.edu"
+                  placeholder="usuario@siga.edu"
                   value={form.email}
                   onChange={(e) => setForm({ ...form, email: e.target.value })}
                   required
@@ -158,12 +159,6 @@ export function LoginForm() {
             <a href="#" className="text-sm font-semibold text-primary hover:text-primary-dark transition-colors">
               Contacta a Soporte
             </a>
-          </div>
-
-          <div className="mt-10 p-4 rounded-xl text-center bg-slate-light border border-dashed border-slate-300">
-            <p className="text-slate-500 text-sm">
-              <strong className="text-navy">Modo Demo Activo:</strong> admin@siga.edu / admin123
-            </p>
           </div>
         </div>
       </div>

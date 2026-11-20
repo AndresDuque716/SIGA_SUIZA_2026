@@ -28,6 +28,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 from fastapi import APIRouter, Depends, HTTPException, Request
+from seguridad import acceso_estudiante, solo_caja, solo_personal
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -674,7 +675,7 @@ async def guardar_config(data: dict, db: AsyncSession = Depends(get_db)):
 # Recibos de caja
 # ---------------------------------------------------------------------------
 
-@router.get("/pagos")
+@router.get("/pagos", dependencies=[Depends(solo_caja)])
 async def listar_pagos(estudiante_id: Optional[int] = None, db: AsyncSession = Depends(get_db)):
     secreto = await secreto_qr(db)
     stmt = select(PagoCaja).where(PagoCaja.estado == "PAGADO").order_by(PagoCaja.fecha_pago.desc(), PagoCaja.id.desc())
@@ -746,7 +747,7 @@ async def registrar_pago(data: PagoIn, request: Request, db: AsyncSession = Depe
     return {"pago": pago_dict(pago, secreto, await url_publica_qr(db)), "pagoMatricula": bool(est.pago_matricula)}
 
 
-@router.get("/estudiantes/{estudiante_id}/estado-cuenta")
+@router.get("/estudiantes/{estudiante_id}/estado-cuenta", dependencies=[Depends(acceso_estudiante)])
 async def estado_cuenta(estudiante_id: int, db: AsyncSession = Depends(get_db)):
     secreto = await secreto_qr(db)
     est = await estudiante_o_404(db, estudiante_id)
@@ -958,7 +959,7 @@ async def _boletas_sinteticas(db: AsyncSession, secreto: bytes, dni: str, estudi
     return boletas
 
 
-@router.get("/pagos/consultar")
+@router.get("/pagos/consultar", dependencies=[Depends(solo_personal)])
 async def consultar_pago(codigo: Optional[str] = None, dni: Optional[str] = None, q: Optional[str] = None,
                          db: AsyncSession = Depends(get_db)):
     secreto = await secreto_qr(db)
@@ -1002,7 +1003,7 @@ async def validar_pago(data: ValidarPagoIn, db: AsyncSession = Depends(get_db)):
     return {"valido": True, "recibo": recibo, "verificadoEn": formato_fecha_hora(ahora_peru())}
 
 
-@router.get("/boletas-disponibles")
+@router.get("/boletas-disponibles", dependencies=[Depends(solo_personal)])
 async def listar_boletas_disponibles(dni: Optional[str] = None, q: Optional[str] = None, search: Optional[str] = None,
                                      concepto: Optional[str] = None, status: Optional[str] = None,
                                      estudiante_id: Optional[int] = None, db: AsyncSession = Depends(get_db)):

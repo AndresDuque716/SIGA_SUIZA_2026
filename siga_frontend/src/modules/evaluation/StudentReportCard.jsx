@@ -487,15 +487,12 @@ export function StudentReportCard() {
     if (isAdmin || !user?.email) return;
     (async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/mod-gestion-academica/estudiantes/`, {
+        // Solo su propia ficha: el estudiante ya no puede leer el padrón completo.
+        const res = await fetch(`${API_BASE}/api/mod-gestion-academica/estudiantes/mi-ficha`, {
           headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
         });
-        const lista = res.ok ? await res.json() : [];
-        const correo = user.email.trim().toLowerCase();
-        const propia = (Array.isArray(lista) ? lista : []).find(s =>
-          [s.email_institucional, s.email_personal].some(e => (e || '').trim().toLowerCase() === correo)
-        );
-        if (propia) {
+        const propia = res.ok ? await res.json() : null;
+        if (propia?.id) {
           setFichaPropiaId(propia.id);
         } else {
           setError('Tu cuenta no está vinculada a una ficha de estudiante. Pide a Secretaría que registre tu correo en tu ficha.');
