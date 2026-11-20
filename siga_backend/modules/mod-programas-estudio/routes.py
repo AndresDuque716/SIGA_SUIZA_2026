@@ -130,6 +130,47 @@ async def crear_periodo(periodo: PeriodoCreate, request: Request, db: AsyncSessi
     await db.refresh(db_periodo)
     return db_periodo
 
+class PeriodoFechasUpdate(BaseModel):
+    fecha_inicio: datetime
+    fecha_fin: datetime
+    fecha_fin_matricula_regular: Optional[datetime] = None
+    fecha_fin_matricula_extemporanea: Optional[datetime] = None
+
+
+ROLES_CALENDARIO = {"admin", "secretaria_academica", "director"}
+
+
+@router.put("/periodos/{periodo_id}", response_model=PeriodoResponse)
+async def actualizar_fechas_periodo(periodo_id: int, fechas: PeriodoFechasUpdate, request: Request,
+                                    db: AsyncSession = Depends(get_db)):
+    """Corrige las fechas de un periodo existente (antes solo se podía crear o cambiar su estado,
+    así que una fecha de matrícula vencida no tenía arreglo)."""
+    ident = await get_identity(request, db)
+    if not (es_superadmin(ident) or set(ident.roles) & ROLES_CALENDARIO):
+        raise HTTPException(status_code=403, detail="No tiene permisos para modificar el calendario académico.")
+
+    db_periodo = (await db.execute(select(PeriodoAcademico).where(PeriodoAcademico.id == periodo_id))).scalar_one_or_none()
+    if not db_periodo:
+        raise HTTPException(status_code=404, detail="Periodo no encontrado")
+
+    data = {k: (v.replace(tzinfo=None) if v is not None and v.tzinfo else v) for k, v in fechas.model_dump().items()}
+    if data["fecha_fin"] < data["fecha_inicio"]:
+        raise HTTPException(status_code=400, detail="La fecha de fin no puede ser anterior a la de inicio.")
+    regular, extemporanea = data["fecha_fin_matricula_regular"], data["fecha_fin_matricula_extemporanea"]
+    if regular and extemporanea and extemporanea < regular:
+        raise HTTPException(status_code=400, detail="El cierre de matrícula extemporánea no puede ser anterior al de la regular.")
+
+    for k, v in data.items():
+        setattr(db_periodo, k, v)
+    db.add(OutboxEvent(event_type="periodo.fechas_actualizadas", payload={
+        "id": db_periodo.id, "codigo": db_periodo.codigo,
+        "metadata": {"request_id": request.headers.get("X-Request-ID", "unknown")},
+    }))
+    await db.commit()
+    await db.refresh(db_periodo)
+    return db_periodo
+
+
 @router.get("/periodos", response_model=List[PeriodoResponse])
 async def obtener_periodos(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(PeriodoAcademico).order_by(PeriodoAcademico.fecha_inicio.desc()))
