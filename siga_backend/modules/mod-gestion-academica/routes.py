@@ -171,17 +171,35 @@ async def ingesta_admitidos(request: Request, data: IngestaMasivaRequest, db: As
 
 @router.post("/estudiantes/", response_model=EstudianteResponse, status_code=status.HTTP_201_CREATED)
 async def crear_estudiante(request: Request, data: EstudianteCreate, db: AsyncSession = Depends(get_db)):
-    existing = await db.execute(select(Estudiante).where(
-        or_(Estudiante.dni == data.dni, Estudiante.codigo_estudiante == data.codigo_estudiante)
-    ))
-    existing_student = existing.scalar_one_or_none()
-    if existing_student:
-        if existing_student.dni == data.dni:
-            raise HTTPException(status_code=400, detail="El DNI ya se encuentra registrado en el sistema.")
-        else:
-            raise HTTPException(status_code=400, detail="El código de estudiante ya existe. Genere uno nuevo.")
+    def _norm(t):
+        return " ".join(str(t or "").lower().split())
 
-    db_estudiante = Estudiante(**data.model_dump())
+    # DNI y código se consultan por separado: con un solo OR, si el DNI era de un alumno y el
+    # código de otro, la consulta devolvía dos filas y el servidor fallaba con error 500.
+    por_dni = (await db.execute(select(Estudiante).where(Estudiante.dni == data.dni))).scalars().first()
+    if por_dni:
+        mismo_envio = (por_dni.codigo_estudiante == data.codigo_estudiante
+                       and _norm(por_dni.nombres) == _norm(data.nombres)
+                       and _norm(por_dni.apellidos) == _norm(data.apellidos))
+        if mismo_envio:
+            # El mismo registro llegó dos veces (doble clic o respuesta perdida): ya está guardado.
+            return por_dni
+        raise HTTPException(
+            status_code=400,
+            detail=f"El DNI {data.dni} ya está registrado para {por_dni.nombres} {por_dni.apellidos} "
+                   f"(código {por_dni.codigo_estudiante}).",
+        )
+
+    datos = data.model_dump()
+    codigo_ocupado = (await db.execute(
+        select(Estudiante.id).where(Estudiante.codigo_estudiante == data.codigo_estudiante)
+    )).scalars().first()
+    if codigo_ocupado:
+        # El código lo propone el sistema y el formulario no deja cambiarlo: si otro registro lo
+        # tomó antes (dos personas registrando a la vez), se asigna el siguiente libre.
+        datos["codigo_estudiante"] = (await obtener_siguiente_codigo(db))["codigo_estudiante"]
+
+    db_estudiante = Estudiante(**datos)
     db.add(db_estudiante)
     await db.flush()
     

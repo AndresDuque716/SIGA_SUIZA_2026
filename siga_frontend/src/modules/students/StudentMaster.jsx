@@ -840,6 +840,12 @@ export function StudentMaster() {
         body: JSON.stringify(payload)
       });
       if (res.ok) {
+        const guardado = await res.json().catch(() => null);
+        const codigoFinal = guardado?.codigo_estudiante || payload.codigo_estudiante;
+        if (codigoFinal !== payload.codigo_estudiante) {
+          toast.info(`El código sugerido ya estaba en uso; se asignó ${codigoFinal}.`);
+        }
+        toast.success(`Estudiante ${payload.nombres} ${payload.apellidos} registrado con el código ${codigoFinal}.`);
         setShowModal(false);
         setForm(createEmptyStudentForm(form.programa_id));
         setWizardStep(1);
