@@ -772,11 +772,13 @@ async def eliminar_estudiante(estudiante_id: int, request: Request, eliminar_reg
 async def realizar_matricula(request: Request, data: MatriculaCreate, db: AsyncSession = Depends(get_db)):
     # Validar si ya está matriculado en este periodo
     from sqlalchemy.future import select
+    # Anular guarda "anulada": antes se comparaba con "anulado" y una matrícula anulada seguía
+    # impidiendo volver a matricular al alumno en ese periodo.
     existing = await db.execute(
         select(Matricula).where(
             Matricula.estudiante_id == data.estudiante_id,
             Matricula.periodo_id == data.periodo_id,
-            Matricula.estado_matricula != 'anulado'
+            Matricula.estado_matricula.notin_(["anulada", "anulado"])
         )
     )
     if existing.scalars().first():
@@ -796,7 +798,13 @@ async def realizar_matricula(request: Request, data: MatriculaCreate, db: AsyncS
     for det in data.detalles:
         db_detalle = MatriculaDetalle(matricula_id=db_matricula.id, **det.model_dump())
         db.add(db_detalle)
-    
+
+    # El alumno pasa a "matriculado" (igual que en la matrícula automática de Admisión);
+    # sin esto la lista seguía mostrándolo como postulante con el botón "Matricular".
+    est_matriculado = (await db.execute(select(Estudiante).where(Estudiante.id == data.estudiante_id))).scalar_one_or_none()
+    if est_matriculado:
+        est_matriculado.estado_academico = "matriculado"
+
     event_payload = {
         "event_id": str(uuid.uuid4()),
         "event_type": "gestion_academica.matricula.confirmada",
@@ -921,7 +929,16 @@ async def anular_matricula(matricula_id: int, request: Request, db: AsyncSession
         raise HTTPException(status_code=404, detail="Matrícula no encontrada")
 
     db_matricula.estado_matricula = "anulada"
-    
+    await db.flush()
+    # Si ya no le queda ninguna matrícula vigente, el alumno deja de figurar como matriculado.
+    otra_vigente = (await db.execute(select(Matricula.id).where(
+        Matricula.estudiante_id == db_matricula.estudiante_id,
+        Matricula.estado_matricula.notin_(["anulada", "anulado"]),
+    ))).scalars().first()
+    est_anulado = (await db.execute(select(Estudiante).where(Estudiante.id == db_matricula.estudiante_id))).scalar_one_or_none()
+    if est_anulado and not otra_vigente and est_anulado.estado_academico == "matriculado":
+        est_anulado.estado_academico = "postulante"
+
     event_payload = {
         "event_id": str(uuid.uuid4()),
         "event_type": "gestion_academica.matricula.anulada",
