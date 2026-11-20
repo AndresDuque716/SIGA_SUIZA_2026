@@ -288,7 +288,7 @@ export function EnrollmentDashboard() {
                     <td className="py-3 px-4 text-right">
                       {student.estado_academico === 'matriculado' ? (
                         <span className="inline-flex items-center gap-1 px-4 py-1.5 text-sm font-semibold text-blue-700 bg-blue-50 rounded-lg">
-                          ✓ Matriculado
+                          Matriculado ✓
                         </span>
                       ) : (
                         <button
