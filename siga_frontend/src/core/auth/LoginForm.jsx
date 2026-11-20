@@ -4,10 +4,11 @@ import { GraduationCap, Users, ClipboardList, MonitorSmartphone, Mail, Lock, Eye
 
 export function LoginForm() {
   const { login } = useAuth();
-  // Sin credenciales precargadas: el sitio es público.
+  // TEMPORAL (pedido del equipo mientras se desarrolla): cuenta admin precargada para entrar rápido.
+  // QUITAR antes de entregar el sistema: el sitio es público y cualquiera entraría como Super Admin.
   const [form, setForm] = useState({
-    email: '',
-    password: '',
+    email: 'admin@siga.edu',
+    password: 'admin123',
   });
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
