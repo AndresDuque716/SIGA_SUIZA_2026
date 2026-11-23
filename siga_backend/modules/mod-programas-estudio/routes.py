@@ -1547,3 +1547,88 @@ async def eliminar_tutoria(programa_id: int, tutoria_id: int, db: AsyncSession =
     await db.commit()
     return {"message": "Tutoría eliminada"}
 
+
+
+# ==========================================
+# DOCUMENTOS (sílabos y planes de trabajo)
+# ==========================================
+# Antes la subida era simulada: solo se guardaba "/docs/planes/<nombre>" y "Ver Doc" abría una
+# ruta inexistente (Vercel devolvía la app y parecía que todo se reiniciaba). Ahora el archivo
+# se guarda en la base de datos y se sirve por el gateway con la sesión del usuario.
+import base64
+import binascii
+from fastapi import Response
+from models import DocumentoArchivo
+
+MAX_DOCUMENTO_BYTES = 8 * 1024 * 1024  # 8 MB
+TIPOS_DOCUMENTO = {
+    "application/pdf", "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "image/png", "image/jpeg",
+}
+EXTENSIONES_DOCUMENTO = {
+    ".pdf": "application/pdf", ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+}
+ROLES_DOCUMENTOS = {"docente", "coordinador_programa", "secretaria_academica", "secretaria_programa", "director", "admin"}
+
+
+class DocumentoSubida(BaseModel):
+    nombre: str
+    content_type: Optional[str] = None
+    contenido_base64: str
+
+
+@router.post("/archivos", status_code=status.HTTP_201_CREATED)
+async def subir_documento(doc: DocumentoSubida, request: Request, db: AsyncSession = Depends(get_db)):
+    ident = await get_identity(request, db)
+    if not (es_superadmin(ident) or ROLES_DOCUMENTOS.intersection(ident.roles)):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tiene permisos para subir documentos")
+
+    nombre = (doc.nombre or "").strip().replace("\\", "/").split("/")[-1][:200] or "documento"
+    extension = ("." + nombre.rsplit(".", 1)[-1].lower()) if "." in nombre else ""
+    content_type = (doc.content_type or "").split(";")[0].strip().lower()
+    if content_type not in TIPOS_DOCUMENTO:
+        content_type = EXTENSIONES_DOCUMENTO.get(extension, "")
+    if content_type not in TIPOS_DOCUMENTO:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Formato no permitido. Suba un PDF, Word, Excel o imagen (PNG/JPG).")
+
+    contenido = doc.contenido_base64.split(",", 1)[-1]  # admite "data:...;base64,xxxx"
+    try:
+        datos = base64.b64decode(contenido, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El archivo llegó dañado. Vuelva a intentarlo.")
+    if not datos:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El archivo está vacío.")
+    if len(datos) > MAX_DOCUMENTO_BYTES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El archivo supera el máximo de 8 MB.")
+
+    registro = DocumentoArchivo(nombre=nombre, content_type=content_type, tamano=len(datos), datos=datos, subido_por=ident.user_id)
+    db.add(registro)
+    await db.commit()
+    await db.refresh(registro)
+    return {
+        "id": registro.id,
+        "nombre": registro.nombre,
+        "tamano": registro.tamano,
+        "url": f"/api/mod-programas-estudio/archivos/{registro.id}",
+    }
+
+
+@router.get("/archivos/{archivo_id}")
+async def descargar_documento(archivo_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+    await get_identity(request, db)  # solo usuarios con sesión
+    registro = await db.get(DocumentoArchivo, archivo_id)
+    if not registro:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="El documento no existe o fue eliminado")
+    nombre_ascii = registro.nombre.encode("ascii", "ignore").decode() or "documento"
+    return Response(
+        content=registro.datos,
+        media_type=registro.content_type,
+        headers={"Content-Disposition": f'inline; filename="{nombre_ascii}"', "Cache-Control": "private, max-age=0"},
+    )
