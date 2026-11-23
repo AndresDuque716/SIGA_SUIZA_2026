@@ -69,6 +69,8 @@ export function CoordinatorAcademic() {
   const [docentes, setDocentes] = useState([]);
   // Docentes vinculados a otras carreras: también pueden dictar en este programa (p. ej. cursos transversales)
   const [otrosDocentes, setOtrosDocentes] = useState([]);
+  // Todos los usuarios, para mostrar el nombre real de quien presentó un documento
+  const [usuarios, setUsuarios] = useState([]);
   const [unidadesFlat, setUnidadesFlat] = useState([]);
   const [cargaLectiva, setCargaLectiva] = useState([]);
   const [horarios, setHorarios] = useState([]);
@@ -93,6 +95,7 @@ export function CoordinatorAcademic() {
 
         setPrograms(progRes || []);
         setPeriods(perRes || []);
+        setUsuarios(Array.isArray(usuariosRes) ? usuariosRes : []);
 
         // Combinar personal institucional y usuarios con rol docente
         const staffList = Array.isArray(personalRes) ? [...personalRes] : [];
@@ -251,7 +254,9 @@ export function CoordinatorAcademic() {
       toast.success("Docente asignado correctamente a los cursos seleccionados.");
     } catch (error) {
       console.error("Error saving carga", error);
-      toast.error("Error al guardar la carga lectiva (verifique que el curso no esté ya asignado en esa sección).");
+      // Mostrar el motivo real que devuelve el servidor (curso ya asignado, periodo cerrado, etc.)
+      fetchCargaYHorarios();
+      toast.error(error?.message || "Error al guardar la carga lectiva (verifique que el curso no esté ya asignado en esa sección).");
     } finally {
       setSaving(false);
     }
@@ -796,16 +801,17 @@ export function CoordinatorAcademic() {
               programId={selectedProgram}
               periodId={selectedPeriod}
               docentes={docentes}
+              usuarios={usuarios}
               cargaLectiva={cargaLectiva}
               unidadesFlat={unidadesFlat}
             />
           )}
 
           {!loading && activeTab === 'tutorias' && (
-            <CoordinatorTutorias 
+            <CoordinatorTutorias
               programId={selectedProgram}
               periodId={selectedPeriod}
-              docentes={docentes}
+              docentes={[...docentes, ...otrosDocentes]}
             />
           )}
 
