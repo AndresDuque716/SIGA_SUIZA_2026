@@ -67,6 +67,8 @@ export function CoordinatorAcademic() {
   const [personal, setPersonal] = useState([]);
   const [allDocentes, setAllDocentes] = useState([]);
   const [docentes, setDocentes] = useState([]);
+  // Docentes vinculados a otras carreras: también pueden dictar en este programa (p. ej. cursos transversales)
+  const [otrosDocentes, setOtrosDocentes] = useState([]);
   const [unidadesFlat, setUnidadesFlat] = useState([]);
   const [cargaLectiva, setCargaLectiva] = useState([]);
   const [horarios, setHorarios] = useState([]);
@@ -162,6 +164,20 @@ export function CoordinatorAcademic() {
     // Map to the format the form expects (d.id, d.full_name)
     const staffFormat = filteredStaff.map(p => p.usuario);
     setDocentes(staffFormat);
+
+    // Resto del instituto con rol docente o coordinador (el servidor acepta a cualquiera de ellos)
+    const idsPrograma = new Set(staffFormat.map(u => u.id));
+    const otros = personal
+      .filter(p =>
+        p?.usuario?.id &&
+        !idsPrograma.has(p.usuario.id) &&
+        p.usuario.is_active !== false &&
+        p?.perfil?.cargo_funcional !== 'SECRETARIA_PROGRAMA' &&
+        (p.usuario.roles || []).some(r => ['docente', 'coordinador_programa'].includes(r?.name || r))
+      )
+      .map(p => ({ ...p.usuario, programa_estudio_id: p.perfil?.programa_estudio_id ?? null }))
+      .sort((a, b) => (a.full_name || a.email || '').localeCompare(b.full_name || b.email || ''));
+    setOtrosDocentes(otros);
 
     const fetchMalla = async () => {
       try {
@@ -540,10 +556,30 @@ export function CoordinatorAcademic() {
                             onChange={e => setCargaForm({...cargaForm, docente_id: e.target.value})}
                           >
                             <option value="">Seleccione Docente</option>
-                            {docentes.map(d => (
-                              <option key={d.id} value={d.id}>{d.full_name || d.email}</option>
-                            ))}
+                            {docentes.length > 0 && (
+                              <optgroup label="Docentes de este programa">
+                                {docentes.map(d => (
+                                  <option key={d.id} value={d.id}>{d.full_name || d.email}</option>
+                                ))}
+                              </optgroup>
+                            )}
+                            {otrosDocentes.length > 0 && (
+                              <optgroup label="Otros docentes del instituto">
+                                {otrosDocentes.map(d => {
+                                  const prog = programs.find(p => p.id === d.programa_estudio_id)?.nombre;
+                                  return (
+                                    <option key={d.id} value={d.id}>{(d.full_name || d.email) + (prog ? ` (${prog})` : '')}</option>
+                                  );
+                                })}
+                              </optgroup>
+                            )}
                           </select>
+                          {docentes.length === 0 && (
+                            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2 mt-2 leading-relaxed">
+                              Este programa aún no tiene docentes propios. Puede asignar uno de otra carrera, o vincularlo
+                              en <b>Administración → Plana Docente / RRHH</b> eligiendo este programa de estudios.
+                            </p>
+                          )}
                         </div>
 
                         {cargaForm.docente_id && (
