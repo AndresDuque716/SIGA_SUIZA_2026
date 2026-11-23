@@ -266,7 +266,9 @@ async def actualizar_programa(programa_id: int, programa_data: ProgramaCreate, d
     if not programa:
         raise HTTPException(status_code=404, detail="Programa no encontrado")
 
-    for field, value in programa_data.model_dump().items():
+    # Solo los campos enviados: "Editar carrera" no manda plan_estudio_id y antes lo dejaba en NULL,
+    # desvinculando el plan de estudios (y desactivando la detección de alumnos "Histórico").
+    for field, value in programa_data.model_dump(exclude_unset=True).items():
         setattr(programa, field, value)
 
     await db.commit()
