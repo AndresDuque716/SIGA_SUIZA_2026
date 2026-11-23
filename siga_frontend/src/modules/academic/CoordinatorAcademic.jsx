@@ -11,6 +11,7 @@ import { CoordinatorActas } from './CoordinatorActas';
 import { ScheduleBuilder } from './ScheduleBuilder';
 import { GraduationCap, Calendar, BookOpen, ClipboardCheck, UserCog, Clock, X, ClipboardList, BarChart3, ExternalLink, Trash2, Download, Copy, AlertTriangle, KeyRound, FileCheck } from 'lucide-react';
 import { AssignmentModal } from './AssignmentModal';
+import { exportarCargaLectivaExcel } from './lib/cargaLectivaExport';
 
 function useSafeToast() {
   try {
@@ -332,17 +333,23 @@ export function CoordinatorAcademic() {
     return ud ? ud.nombre : `ID: ${id}`;
   };
 
-  const handleExportCSV = () => {
-    const headers = "Unidad Didactica,Docente,Turno,Seccion,Estado\n";
-    const rows = cargaLectiva.map(c => `"${getUDName(c.unidad_didactica_id)}","${getDocenteName(c.docente_id)}",${c.turno},${c.seccion},${c.estado}`).join('\n');
-    const blob = new Blob(["\uFEFF" + headers + rows], { type: 'text/csv;charset=utf-8;' }); // \uFEFF para soportar caracteres UTF-8 en Excel
-    const link = document.createElement("a");
-    const url = URL.createObjectURL(blob);
-    link.setAttribute("href", url);
-    link.setAttribute("download", `Carga_Lectiva_${selectedProgram}_${selectedPeriod}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  // Excel (.xlsx) real: el CSV con comas se abr\u00EDa en una sola columna en Excel en espa\u00F1ol
+  const handleExportExcel = () => {
+    try {
+      exportarCargaLectivaExcel({
+        programa: programs.find(p => String(p.id) === String(selectedProgram)),
+        periodo: periods.find(p => String(p.id) === String(selectedPeriod)),
+        cargaLectiva,
+        unidadesFlat,
+        buscarDocente: (id) => {
+          const u = [...allDocentes, ...docentes, ...otrosDocentes, ...usuarios].find(d => d.id === id);
+          return u ? { nombre: u.full_name || u.email, email: u.email } : null;
+        },
+      });
+    } catch (err) {
+      console.error('Error exportando la carga lectiva', err);
+      toast.error('No se pudo generar el Excel de la carga lectiva.');
+    }
   };
 
   const handleOpenCloneModal = () => {
@@ -618,10 +625,10 @@ export function CoordinatorAcademic() {
                         <h3 className="text-lg font-semibold text-slate-text">Carga Lectiva Actual</h3>
                         {cargaLectiva.length > 0 && (
                           <button 
-                            onClick={handleExportCSV}
+                            onClick={handleExportExcel}
                             className="text-sm font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg flex items-center gap-2 transition-colors border border-emerald-200"
                           >
-                            <Download size={16} /> Exportar CSV
+                            <Download size={16} /> Exportar Excel
                           </button>
                         )}
                       </div>
