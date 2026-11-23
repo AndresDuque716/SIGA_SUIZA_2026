@@ -39,7 +39,7 @@ from domain import (
 )
 from enrollment_engine import construir_propuesta, evaluar_ventana_matricula
 from enrollment_service import cargar_historial, construir_contexto
-from intermodule import fetch_cargaLectiva, fetch_malla, fetch_programa, fetch_periodo
+from intermodule import fetch_cargaLectiva, fetch_malla, fetch_programa, fetch_programas, fetch_periodo
 from models import (
     BeneficioEstudiante,
     ConvalidacionDetalle,
@@ -643,12 +643,20 @@ async def tipos_alumnos(
         await db.execute(stmt.order_by(Estudiante.apellidos, Estudiante.nombres))
     ).scalars().all()
 
-    # Plan vigente del programa (para detectar alumnos "históricos").
+    # Plan vigente de cada carrera (para detectar alumnos "históricos"). Antes solo se buscaba
+    # cuando llegaba programa_id; la pantalla no lo envía, así que la detección quedaba apagada
+    # y el aviso "sin plan vigente" salía en todas las carreras.
     plan_vigente = None
+    plan_por_programa: Dict[int, Optional[int]] = {}
     if programa_id:
         programa = await fetch_programa(programa_id)
         if isinstance(programa, dict):
             plan_vigente = programa.get("plan_estudio_id")
+        plan_por_programa[programa_id] = plan_vigente
+    else:
+        for p in await fetch_programas():
+            if isinstance(p, dict) and p.get("id") is not None:
+                plan_por_programa[p["id"]] = p.get("plan_estudio_id")
 
     # Unidades convalidadas (aprobadas) por estudiante.
     convalidados_por_est: Dict[int, set] = {}
@@ -685,7 +693,8 @@ async def tipos_alumnos(
         for uid in conv:
             hist[uid] = EstadoCurso.CONVALIDADO.value
         plan_origen = getattr(e, "plan_estudios_id", None)
-        es_historico = bool(plan_origen and plan_vigente and plan_origen != plan_vigente)
+        plan_carrera = plan_por_programa.get(e.programa_id) if e.programa_id else None
+        es_historico = bool(plan_origen and plan_carrera and plan_origen != plan_carrera)
         clasificacion = clasificar_tipo_alumno(hist, conv, es_historico)
         resumen[clasificacion] = resumen.get(clasificacion, 0) + 1
         if filtro and filtro != clasificacion.lower():
@@ -702,7 +711,7 @@ async def tipos_alumnos(
             "tipo_alumno": clasificacion,
             "es_historico": es_historico,
             "plan_origen": plan_origen,
-            "plan_vigente": plan_vigente,
+            "plan_vigente": plan_carrera,
             "total_en_historial": len(hist),
             "aprobadas": sum(1 for s in hist.values() if s == EstadoCurso.APROBADO.value),
             "desaprobadas": sum(1 for s in hist.values() if s == EstadoCurso.DESAPROBADO.value),

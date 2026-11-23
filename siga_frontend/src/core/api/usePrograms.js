@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { apiClient } from './client';
 
 /** Carreras registradas en Gestión Académica (las que se importan desde los planes MINEDU). */
-export function usePrograms() {
+// `recargar`: cambie su valor para volver a pedir la lista (p. ej. tras vincular un plan).
+export function usePrograms(recargar = 0) {
   const [programs, setPrograms] = useState([]);
 
   useEffect(() => {
@@ -13,7 +14,7 @@ export function usePrograms() {
       })
       .catch((e) => console.error('No se pudieron cargar los programas de estudio:', e));
     return () => { active = false; };
-  }, []);
+  }, [recargar]);
 
   return programs;
 }

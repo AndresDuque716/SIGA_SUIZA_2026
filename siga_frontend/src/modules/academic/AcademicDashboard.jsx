@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { apiClient } from '../../core/api/client';
+import { registrarPlanDeCarrera } from '../../core/api/planes';
 import { useToast } from '../../core/ui/ToastContext';
 import { CurriculumMesh } from './CurriculumMesh';
 import { PeriodManager } from './PeriodManager';
@@ -269,7 +270,15 @@ export function AcademicDashboard() {
         estado: newProgram.estado || 'activo'
       };
 
-      await apiClient.callModule('mod-programas-estudio', 'programas', 'POST', payload);
+      const creada = await apiClient.callModule('mod-programas-estudio', 'programas', 'POST', payload);
+
+      // Registrar y vincular su plan de estudios (las importadas desde MINEDU ya lo traen).
+      // No bloquea: si falla, la carrera queda creada y el plan se puede registrar después.
+      try {
+        if (creada?.id) await registrarPlanDeCarrera(creada);
+      } catch (errPlan) {
+        console.warn('No se pudo registrar el plan de la carrera nueva:', errPlan);
+      }
 
       setShowCreateModal(false);
       setCreateError('');
