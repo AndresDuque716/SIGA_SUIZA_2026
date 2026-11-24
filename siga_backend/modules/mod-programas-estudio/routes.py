@@ -611,6 +611,20 @@ async def crear_carga_lectiva(programa_id: int, carga: CargaLectivaCreate, reque
             detail="El usuario asignado debe poseer rol docente o coordinador_programa"
         )
 
+    # El coordinador solo asigna docentes de su propio programa; docentes de otras carreras
+    # solo puede asignarlos el administrador.
+    if not es_superadmin(ident):
+        prog_doc = await db.execute(
+            text("SELECT programa_estudio_id FROM perfiles_personal WHERE user_id = :did"),
+            {"did": carga.docente_id}
+        )
+        fila_prog = prog_doc.fetchone()
+        if not fila_prog or fila_prog[0] != programa_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Solo puede asignar docentes de su propio programa de estudios. Para asignar un docente de otra carrera, pídalo al administrador."
+            )
+
     # 2. Validar que el periodo académico no esté cerrado
     per_res = await db.execute(
         text("SELECT estado FROM periodos_academicos WHERE id = :pid"),

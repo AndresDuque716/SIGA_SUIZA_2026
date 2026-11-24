@@ -50,6 +50,10 @@ function useSafeConfirm() {
 
 export function CoordinatorAcademic() {
   const { user, openPasswordModal } = useAuth();
+  // Solo el administrador puede asignar docentes de otras carreras; el coordinador ve solo los de su programa
+  const rolesSesion = (Array.isArray(user?.roles) ? user.roles : (user?.role ? [user.role] : []))
+    .map(r => (typeof r === 'string' ? r : r?.name));
+  const esAdmin = !!user?.is_superuser || rolesSesion.some(r => ['superadmin', 'admin'].includes(r));
   const { toast } = useSafeToast();
   const { confirm } = useSafeConfirm();
 
@@ -159,9 +163,10 @@ export function CoordinatorAcademic() {
     }
 
     // Filter personal for the selected program (or unassigned/global) and exclude secretaries
-    const filteredStaff = personal.filter(p => 
-      p?.perfil && 
-      (!p.perfil.programa_estudio_id || p.perfil.programa_estudio_id === parseInt(selectedProgram) || p.perfil.programa_estudio_id == selectedProgram) &&
+    // (los que no tienen programa solo los ve el administrador: el servidor no deja que el coordinador los asigne)
+    const filteredStaff = personal.filter(p =>
+      p?.perfil &&
+      ((esAdmin && !p.perfil.programa_estudio_id) || p.perfil.programa_estudio_id === parseInt(selectedProgram) || p.perfil.programa_estudio_id == selectedProgram) &&
       p.perfil.cargo_funcional !== 'SECRETARIA_PROGRAMA' &&
       p?.usuario
     );
@@ -181,7 +186,7 @@ export function CoordinatorAcademic() {
       )
       .map(p => ({ ...p.usuario, programa_estudio_id: p.perfil?.programa_estudio_id ?? null }))
       .sort((a, b) => (a.full_name || a.email || '').localeCompare(b.full_name || b.email || ''));
-    setOtrosDocentes(otros);
+    setOtrosDocentes(esAdmin ? otros : []);
 
     const fetchMalla = async () => {
       try {
@@ -200,7 +205,7 @@ export function CoordinatorAcademic() {
       }
     };
     fetchMalla();
-  }, [selectedProgram, personal]);
+  }, [selectedProgram, personal, esAdmin]);
 
   const fetchCargaYHorarios = useCallback(async () => {
     setLoading(true);
@@ -588,7 +593,7 @@ export function CoordinatorAcademic() {
                           </select>
                           {docentes.length === 0 && (
                             <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2 mt-2 leading-relaxed">
-                              Este programa aún no tiene docentes propios. Puede asignar uno de otra carrera, o vincularlo
+                              Este programa aún no tiene docentes propios. {esAdmin ? 'Puede asignar uno de otra carrera, o vincularlo' : 'El administrador debe registrarlo'}
                               en <b>Administración → Plana Docente / RRHH</b> eligiendo este programa de estudios.
                             </p>
                           )}
