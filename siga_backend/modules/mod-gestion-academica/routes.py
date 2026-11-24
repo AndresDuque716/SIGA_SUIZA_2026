@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Depends, status, Request, UploadFi
 from seguridad import acceso_estudiante, id_ficha_propia, identidad, solo_padron, solo_personal
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_, text
+from sqlalchemy import select, or_, text, bindparam
 from sqlalchemy.orm import selectinload
 from database import get_db, OutboxEvent
 from models import Estudiante, Matricula, MatriculaDetalle
@@ -218,16 +218,79 @@ async def crear_estudiante(request: Request, data: EstudianteCreate, db: AsyncSe
     await db.refresh(db_estudiante)
     return db_estudiante
 
+# ---------------------------------------------------------------------------
+# Cachimbos e históricos por periodo
+# Histórico: ya tuvo una matrícula (no anulada) en OTRO periodo -> puede matricularse en uno nuevo.
+# Cachimbo: nunca se matriculó -> solo en el periodo de inicio de SU año de ingreso
+# (código "2026-..." -> 2026-I). Al abrir 2026-II o 2027-I no deben aparecer los cachimbos de 2026.
+# ---------------------------------------------------------------------------
+import re as _re
+
+_ESTADOS_ANULADOS = ("anulada", "anulado", "anulada_por_reserva")
+
+
+def _anio_ingreso(est) -> Optional[int]:
+    m = _re.match(r"^\s*(\d{4})-", str(getattr(est, "codigo_estudiante", "") or ""))
+    if m:
+        return int(m.group(1))
+    creado = getattr(est, "created_at", None)
+    return creado.year if creado else None
+
+
+def _anio_periodo(codigo: str) -> Optional[int]:
+    m = _re.match(r"^\s*(\d{4})", str(codigo or ""))
+    return int(m.group(1)) if m else None
+
+
+async def _periodos_con_matricula(db) -> dict:
+    """{estudiante_id: {periodo_id, ...}} con matrículas no anuladas."""
+    from sqlalchemy import text
+    filas = (await db.execute(text(
+        "SELECT estudiante_id, periodo_id FROM matriculas WHERE estado_matricula NOT IN :anuladas"
+    ).bindparams(bindparam("anuladas", expanding=True)), {"anuladas": list(_ESTADOS_ANULADOS)})).all()
+    salida = {}
+    for est_id, per_id in filas:
+        salida.setdefault(est_id, set()).add(per_id)
+    return salida
+
+
+def _condicion_en_periodo(est, periodo_id: int, codigo_periodo: str, periodos_est: set) -> str:
+    """'matriculado' | 'historico' | 'cachimbo' | 'no_habilitado' para el periodo indicado."""
+    from domain import es_periodo_inicio_anio
+    if periodo_id in periodos_est:
+        return "matriculado"
+    if any(p != periodo_id for p in periodos_est):
+        return "historico"
+    anio = _anio_ingreso(est)
+    if es_periodo_inicio_anio(codigo_periodo) and anio and anio == _anio_periodo(codigo_periodo):
+        return "cachimbo"
+    return "no_habilitado"
+
+
 @router.get("/estudiantes/", dependencies=[Depends(solo_padron)])
-async def obtener_estudiantes(programa_id: Optional[int] = None, db: AsyncSession = Depends(get_db)):
+async def obtener_estudiantes(programa_id: Optional[int] = None, periodo_id: Optional[int] = None,
+                              db: AsyncSession = Depends(get_db)):
+    """Padrón. Con ``periodo_id`` solo devuelve a los alumnos habilitados para matricularse en ese
+    periodo (históricos, cachimbos de ese año y los ya matriculados en él) e indica su condición."""
     import traceback
+    from sqlalchemy import text
     try:
         query = select(Estudiante).order_by(Estudiante.apellidos)
         if programa_id is not None:
             query = query.where(Estudiante.programa_id == programa_id)
         result = await db.execute(query)
         rows = result.scalars().all()
-        print(f"[DEBUG] Estudiantes encontrados: {len(rows)}")
+
+        condiciones = {}
+        if periodo_id is not None:
+            codigo_periodo = (await db.execute(
+                text("SELECT codigo FROM periodos_academicos WHERE id = :p"), {"p": periodo_id}
+            )).scalar() or ""
+            por_est = await _periodos_con_matricula(db)
+            for r in rows:
+                condiciones[r.id] = _condicion_en_periodo(r, periodo_id, codigo_periodo, por_est.get(r.id, set()))
+            rows = [r for r in rows if condiciones[r.id] != "no_habilitado"]
+
         return [
             {
                 "id": r.id,
@@ -248,6 +311,7 @@ async def obtener_estudiantes(programa_id: Optional[int] = None, db: AsyncSessio
                 "fecha_limite_documentos": r.fecha_limite_documentos.isoformat() if r.fecha_limite_documentos else None,
                 "modalidad_admision": r.modalidad_admision,
                 "metadata_admision": r.metadata_admision or {},
+                "condicion_periodo": condiciones.get(r.id),
             }
             for r in rows
         ]
@@ -326,33 +390,62 @@ def _numero_ciclo(nombre_modulo, orden):
             return int(match.group(1))
     return orden if orden is not None else 1
 
-async def _construir_ciclos(db, estudiante_id, plan_id, periodo_id=None):
-    """Documento historico: agrupa las unidades del plan por ciclo con la mejor nota del estudiante."""
+async def _construir_ciclos(db, estudiante_id, plan_id, periodo_id=None, programa_id=None):
+    """Documento historico: agrupa las unidades por ciclo con la mejor nota del estudiante.
+
+    Las notas (evaluacion_registros) y la carga lectiva usan los ids de la MALLA de la carrera
+    (programa_unidades). Antes se armaba con el catálogo del plan (unidades_plan), cuyos ids son
+    otros: las notas nunca coincidían y el alumno veía sus cursos sin notas. Se usa la malla y,
+    solo si la carrera no tiene malla, el catálogo del plan.
+    """
     from sqlalchemy import text
 
-    if not plan_id:
-        return [], 0
+    modulos, unidades = [], []
+    if programa_id:
+        modulos = [dict(m) for m in (await db.execute(
+            text("""
+                SELECT id, nombre, orden, periodo AS ciclo_num
+                FROM programa_modulos WHERE programa_id = :pid
+                ORDER BY periodo, orden, id
+            """),
+            {"pid": programa_id}
+        )).mappings().all()]
+        if modulos:
+            ph = ','.join(f':m{i}' for i in range(len(modulos)))
+            unidades = (await db.execute(
+                text(f"""
+                    SELECT pu.id, pu.programa_modulo_id AS modulo_id, pu.nombre, up.codigo, pu.creditos,
+                           COALESCE(pu.horas_teoria, 0) + COALESCE(pu.horas_practica, 0) AS horas,
+                           up.tipo, pu.orden
+                    FROM programa_unidades pu
+                    LEFT JOIN unidades_plan up ON up.id = pu.unidad_plan_id
+                    WHERE pu.programa_modulo_id IN ({ph})
+                    ORDER BY pu.programa_modulo_id, pu.orden, pu.id
+                """),
+                {f'm{i}': m["id"] for i, m in enumerate(modulos)}
+            )).mappings().all()
 
-    result_mod = await db.execute(
-        text("SELECT id, nombre, orden FROM modulos_plan WHERE plan_id = :pid ORDER BY orden, id"),
-        {"pid": plan_id}
-    )
-    modulos = result_mod.mappings().all()
     if not modulos:
-        return [], 0
-
-    modulo_ids = [m["id"] for m in modulos]
-    placeholders = ','.join(f':m{i}' for i in range(len(modulo_ids)))
-    result_uni = await db.execute(
-        text(f"""
-            SELECT id, modulo_id, nombre, codigo, creditos, horas, tipo, orden
-            FROM unidades_plan
-            WHERE modulo_id IN ({placeholders})
-            ORDER BY modulo_id, orden, id
-        """),
-        {f'm{i}': mid for i, mid in enumerate(modulo_ids)}
-    )
-    unidades = result_uni.mappings().all()
+        if not plan_id:
+            return [], 0
+        modulos = [dict(m) for m in (await db.execute(
+            text("SELECT id, nombre, orden FROM modulos_plan WHERE plan_id = :pid ORDER BY orden, id"),
+            {"pid": plan_id}
+        )).mappings().all()]
+        if not modulos:
+            return [], 0
+        for m in modulos:
+            m["ciclo_num"] = _numero_ciclo(m["nombre"], m["orden"])
+        placeholders = ','.join(f':m{i}' for i in range(len(modulos)))
+        unidades = (await db.execute(
+            text(f"""
+                SELECT id, modulo_id, nombre, codigo, creditos, horas, tipo, orden
+                FROM unidades_plan
+                WHERE modulo_id IN ({placeholders})
+                ORDER BY modulo_id, orden, id
+            """),
+            {f'm{i}': m["id"] for i, m in enumerate(modulos)}
+        )).mappings().all()
 
     result_eval = await db.execute(
         text("""
@@ -421,7 +514,7 @@ async def _construir_ciclos(db, estudiante_id, plan_id, periodo_id=None):
 
     ciclos = {}
     for mod in modulos:
-        num = _numero_ciclo(mod["nombre"], mod["orden"])
+        num = mod.get("ciclo_num") or _numero_ciclo(mod["nombre"], mod["orden"])
         ciclo = ciclos.setdefault(num, {"ciclo": num, "titulo": _titulo_ciclo(num), "unidades": []})
         for u in unidades_por_modulo.get(mod["id"], []):
             reg = mejor.get(u["id"])
@@ -552,8 +645,9 @@ async def obtener_boletin(estudiante_id: int, periodo_id: Optional[int] = None, 
     cursos_periodo = []
     if matricula and matricula.detalles:
         for det in matricula.detalles:
+            # El detalle guarda el id de la malla de la carrera (programa_unidades), no del plan
             result_unidad = await db.execute(
-                text("SELECT nombre FROM unidades_plan WHERE id = :uid"),
+                text("SELECT nombre FROM programa_unidades WHERE id = :uid"),
                 {"uid": det.unidad_didactica_id}
             )
             unidad_row = result_unidad.mappings().first()
@@ -625,7 +719,7 @@ async def obtener_boletin(estudiante_id: int, periodo_id: Optional[int] = None, 
     observaciones = observ_row["observaciones"] if observ_row else None
 
     plan_estudio_id = plan_row["plan_estudio_id"] if plan_row else None
-    ciclos, ciclos_totales = await _construir_ciclos(db, estudiante_id, plan_estudio_id, periodo_id)
+    ciclos, ciclos_totales = await _construir_ciclos(db, estudiante_id, plan_estudio_id, periodo_id, estudiante.programa_id)
     ciclos_completados = sum(1 for c in ciclos if c.get("completado"))
 
     return {
@@ -784,6 +878,24 @@ async def realizar_matricula(request: Request, data: MatriculaCreate, db: AsyncS
     if existing.scalars().first():
         raise HTTPException(status_code=400, detail="El estudiante ya cuenta con una matrícula registrada para este periodo académico.")
 
+    # Cachimbo fuera de su periodo de ingreso: no se matricula (solo los históricos pasan a periodos nuevos)
+    est_val = (await db.execute(select(Estudiante).where(Estudiante.id == data.estudiante_id))).scalar_one_or_none()
+    if not est_val:
+        raise HTTPException(status_code=404, detail="Estudiante no encontrado")
+    codigo_per = (await db.execute(
+        text("SELECT codigo FROM periodos_academicos WHERE id = :p"), {"p": data.periodo_id}
+    )).scalar() or ""
+    periodos_est = (await _periodos_con_matricula(db)).get(est_val.id, set())
+    if _condicion_en_periodo(est_val, data.periodo_id, codigo_per, periodos_est) == "no_habilitado":
+        anio = _anio_ingreso(est_val)
+        raise HTTPException(
+            status_code=400,
+            detail=(f"{est_val.apellidos}, {est_val.nombres} es ingresante (cachimbo){f' de {anio}' if anio else ''} "
+                    f"y nunca se matriculó. En {codigo_per} solo pueden matricularse alumnos que ya estudiaron "
+                    f"(históricos); los cachimbos se matriculan únicamente en el periodo de inicio de su año de ingreso"
+                    f"{f' ({anio}-I)' if anio else ''}.")
+        )
+
     # Validar créditos
     total_creditos = sum(d.creditos for d in data.detalles)
     if total_creditos < 1 or total_creditos > 40:
@@ -791,6 +903,9 @@ async def realizar_matricula(request: Request, data: MatriculaCreate, db: AsyncS
 
     # Separar detalles
     matricula_data = data.model_dump(exclude={"detalles"})
+    # La matrícula registrada queda confirmada (así lo indica también su evento). Antes quedaba
+    # "pendiente" hasta pulsar "Consolidar" y el docente no podía registrar las notas del alumno.
+    matricula_data["estado_matricula"] = "confirmada"
     db_matricula = Matricula(**matricula_data)
     db.add(db_matricula)
     await db.flush() # Para obtener db_matricula.id
@@ -802,8 +917,12 @@ async def realizar_matricula(request: Request, data: MatriculaCreate, db: AsyncS
     # El alumno pasa a "matriculado" (igual que en la matrícula automática de Admisión);
     # sin esto la lista seguía mostrándolo como postulante con el botón "Matricular".
     est_matriculado = (await db.execute(select(Estudiante).where(Estudiante.id == data.estudiante_id))).scalar_one_or_none()
+    cuenta_alumno = None
     if est_matriculado:
         est_matriculado.estado_academico = "matriculado"
+        # Cuenta del alumno: se crea en su primera matrícula (DNI@siga.edu / DNI) o se reactiva
+        from cuenta_estudiante import asegurar_cuenta_estudiante
+        cuenta_alumno = await asegurar_cuenta_estudiante(db, est_matriculado)
 
     event_payload = {
         "event_id": str(uuid.uuid4()),
@@ -819,7 +938,9 @@ async def realizar_matricula(request: Request, data: MatriculaCreate, db: AsyncS
     await db.commit()
     
     result = await db.execute(select(Matricula).options(selectinload(Matricula.detalles)).where(Matricula.id == db_matricula.id))
-    return result.scalar_one()
+    respuesta = MatriculaResponse.model_validate(result.scalar_one()).model_dump()
+    respuesta["cuenta_alumno"] = cuenta_alumno
+    return respuesta
 
 @router.get("/matriculas/", response_model=List[MatriculaResponse], dependencies=[Depends(solo_personal)])
 async def obtener_matriculas(db: AsyncSession = Depends(get_db)):

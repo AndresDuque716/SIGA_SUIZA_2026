@@ -33,6 +33,11 @@ export function EnrollmentDashboard() {
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPrograma, setCurrentPrograma] = useState('ALL');
+  // Periodo de matrícula: la lista muestra solo a los alumnos habilitados para ese periodo
+  // (históricos y cachimbos de ese año). Antes salía todo el padrón y en un periodo nuevo
+  // aparecían como "cachimbos" alumnos que ya no corresponden a ese ciclo.
+  const [periodos, setPeriodos] = useState([]);
+  const [periodoMatricula, setPeriodoMatricula] = useState('');
   // Secretaría de Programa trabaja solo con su carrera; el resto elige.
   const carreraFija = userRole === 'secretaria_programa' && user?.programa_id != null;
 
@@ -48,10 +53,10 @@ export function EnrollmentDashboard() {
   const fetchStudents = async () => {
     setLoading(true);
     try {
-      let url = `${API_BASE}/api/mod-gestion-academica/estudiantes/`;
-      if (currentPrograma && currentPrograma !== 'ALL') {
-        url += `?programa_id=${currentPrograma}`;
-      }
+      const params = new URLSearchParams();
+      if (currentPrograma && currentPrograma !== 'ALL') params.set('programa_id', currentPrograma);
+      if (periodoMatricula) params.set('periodo_id', periodoMatricula);
+      const url = `${API_BASE}/api/mod-gestion-academica/estudiantes/${params.toString() ? `?${params}` : ''}`;
 
       const response = await fetch(url, {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
@@ -65,17 +70,42 @@ export function EnrollmentDashboard() {
     }
   };
 
+  // Periodo por defecto: el de matrícula abierta más reciente
   useEffect(() => {
-    if (userRole !== 'invitado') {
+    let activo = true;
+    fetch(`${API_BASE}/api/mod-programas-estudio/periodos`, {
+      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (!activo || !Array.isArray(data)) return;
+        const orden = [...data].sort((a, b) => String(b.fecha_inicio || b.codigo).localeCompare(String(a.fecha_inicio || a.codigo)));
+        setPeriodos(orden);
+        const abierto = orden.find(p => ['matricula_abierta', 'en_curso'].includes(p.estado)) || orden[0];
+        if (abierto) setPeriodoMatricula(String(abierto.id));
+      })
+      .catch(err => console.error('No se pudieron cargar los periodos:', err));
+    return () => { activo = false; };
+  }, []);
+
+  useEffect(() => {
+    if (userRole !== 'invitado' && periodoMatricula) {
       if (carreraFija && currentPrograma === 'ALL') {
         setCurrentPrograma(String(user.programa_id));
       } else {
         fetchStudents();
       }
     }
-    // Solo debe re-ejecutarse al cambiar de programa o rol (no en cada tecla del buscador).
+    // Solo debe re-ejecutarse al cambiar de programa, periodo o rol (no en cada tecla del buscador).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPrograma, userRole]);
+  }, [currentPrograma, userRole, periodoMatricula]);
+
+  const periodoActual = periodos.find(p => String(p.id) === String(periodoMatricula));
+  const CONDICION = {
+    matriculado: { texto: 'Matriculado', clase: 'bg-blue-100 text-blue-700 border-blue-200' },
+    historico: { texto: 'Histórico', clase: 'bg-purple-100 text-purple-700 border-purple-200' },
+    cachimbo: { texto: 'Cachimbo', clase: 'bg-green-100 text-green-700 border-green-200' },
+  };
 
   const handleEnrollClick = (student) => {
     setSelectedStudent(student);
@@ -213,7 +243,23 @@ export function EnrollmentDashboard() {
         chips={['Consulta', 'Búsqueda', 'Matrícula']}
       />
 
+      {periodoActual && (
+        <div className="mb-3 max-w-3xl text-xs text-slate-600 bg-white/70 border border-slate-200 rounded-xl px-4 py-2 leading-relaxed">
+          Periodo <b>{periodoActual.codigo}</b>: se muestran los alumnos <b>históricos</b> (ya estudiaron antes)
+          {/-I$|-1$/i.test(periodoActual.codigo || '') ? <> y los <b>cachimbos</b> que ingresaron en {String(periodoActual.codigo).slice(0, 4)}</> : <>; en este periodo no hay cachimbos</>}.
+        </div>
+      )}
       <div className="glass-card p-2 mb-8 flex items-center max-w-3xl gap-2">
+        <select
+          className="input-field py-3 text-sm bg-slate-50 border-none w-36 font-bold text-primary"
+          value={periodoMatricula}
+          onChange={(e) => setPeriodoMatricula(e.target.value)}
+          title="Periodo de matrícula"
+        >
+          {periodos.map(p => (
+            <option key={p.id} value={p.id}>{p.codigo}</option>
+          ))}
+        </select>
         {!carreraFija && (
           <select 
             className="input-field py-3 text-sm bg-slate-50 border-none w-48 font-bold text-primary"
@@ -265,7 +311,9 @@ export function EnrollmentDashboard() {
                   <td colSpan="6" className="py-12 text-center">
                     <div className="text-4xl mb-3 opacity-50">🎓</div>
                     <p className="text-slate-500 font-medium">
-                      {students.length === 0 ? 'No hay estudiantes registrados.' : `Ningún estudiante coincide con "${searchTerm}".`}
+                      {students.length === 0
+                        ? (periodoActual ? `No hay alumnos habilitados para matricularse en ${periodoActual.codigo}.` : 'No hay estudiantes registrados.')
+                        : `Ningún estudiante coincide con "${searchTerm}".`}
                     </p>
                   </td>
                 </tr>
@@ -277,16 +325,22 @@ export function EnrollmentDashboard() {
                     <td className="py-3 px-4 text-slate-600">{student.dni}</td>
                     <td className="py-3 px-4 text-slate-500 text-sm truncate max-w-[150px]" title={student.email_personal}>{student.email_personal || '-'}</td>
                     <td className="py-3 px-4">
-                      <span className={`inline-block px-2 py-1 text-[10px] font-bold uppercase rounded border ${
-                        student.estado_academico === 'matriculado'
-                          ? 'bg-blue-100 text-blue-700 border-blue-200'
-                          : 'bg-green-100 text-green-700 border-green-200'
-                      }`}>
-                        {student.estado_academico}
-                      </span>
+                      {CONDICION[student.condicion_periodo] ? (
+                        <span className={`inline-block px-2 py-1 text-[10px] font-bold uppercase rounded border ${CONDICION[student.condicion_periodo].clase}`}>
+                          {CONDICION[student.condicion_periodo].texto}
+                        </span>
+                      ) : (
+                        <span className={`inline-block px-2 py-1 text-[10px] font-bold uppercase rounded border ${
+                          student.estado_academico === 'matriculado'
+                            ? 'bg-blue-100 text-blue-700 border-blue-200'
+                            : 'bg-green-100 text-green-700 border-green-200'
+                        }`}>
+                          {student.estado_academico}
+                        </span>
+                      )}
                     </td>
                     <td className="py-3 px-4 text-right">
-                      {student.estado_academico === 'matriculado' ? (
+                      {(student.condicion_periodo ? student.condicion_periodo === 'matriculado' : student.estado_academico === 'matriculado') ? (
                         <span className="inline-flex items-center gap-1 px-4 py-1.5 text-sm font-semibold text-blue-700 bg-blue-50 rounded-lg whitespace-nowrap">
                           Matriculado ✓
                         </span>

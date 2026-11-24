@@ -38,6 +38,7 @@ from domain import (
     es_periodo_inicio_anio,
 )
 from enrollment_engine import construir_propuesta, evaluar_ventana_matricula
+from cuenta_estudiante import asegurar_cuenta_estudiante
 from enrollment_service import cargar_historial, construir_contexto
 from intermodule import fetch_cargaLectiva, fetch_malla, fetch_programa, fetch_programas, fetch_periodo
 from models import (
@@ -428,6 +429,8 @@ async def matricular_ingresantes(
             ))
         est.estado_academico = "matriculado"
         est.ciclo_actual = propuesta.ciclo_sugerido
+        # Cuenta del cachimbo: usuario DNI@siga.edu, contraseña su DNI (o se reactiva si ya existía)
+        await asegurar_cuenta_estudiante(db, est)
 
         publicar(db, "gestion_academica.matricula.confirmada", {
             "matricula_id": matricula.id, "estudiante_id": est.id,

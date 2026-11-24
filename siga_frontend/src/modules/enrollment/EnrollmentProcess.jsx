@@ -552,6 +552,17 @@ export function EnrollmentProcess({ initialStudent, onCancel }) {
                 </div>
                 <h3 className="font-extrabold text-3xl text-slate-800 mb-2">¡Matrícula Registrada!</h3>
                 <p className="text-slate-500 text-center max-w-lg">La matrícula quedó <b>confirmada</b>. Emita la boleta con su código QR y cierre el proceso.</p>
+                {matricula?.cuenta_alumno && (
+                  <div className="mt-4 w-full max-w-lg rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 text-center">
+                    {matricula.cuenta_alumno.creada ? (
+                      <>🔑 Se creó la cuenta del alumno: usuario <b>{matricula.cuenta_alumno.usuario}</b> · contraseña: <b>su DNI</b>.</>
+                    ) : matricula.cuenta_alumno.reactivada ? (
+                      <>🔑 Se reactivó la cuenta del alumno <b>{matricula.cuenta_alumno.usuario}</b> con la contraseña que ya tenía.</>
+                    ) : (
+                      <>🔑 El alumno ya tiene su cuenta activa: <b>{matricula.cuenta_alumno.usuario}</b>.</>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

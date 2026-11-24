@@ -61,9 +61,11 @@ async def id_ficha_propia(db: AsyncSession, i: Identity):
     correo = (await db.execute(text("SELECT email FROM core_users WHERE id = :u"), {"u": i.user_id})).scalar()
     if not correo:
         return None
+    # También la cuenta automática del alumno: <DNI>@siga.edu (ver cuenta_estudiante.py)
     return (await db.execute(text(
         "SELECT id FROM estudiantes WHERE lower(trim(email_institucional)) = lower(trim(:c)) "
-        "OR lower(trim(email_personal)) = lower(trim(:c)) ORDER BY id LIMIT 1"
+        "OR lower(trim(email_personal)) = lower(trim(:c)) "
+        "OR lower(trim(:c)) = trim(dni) || '@siga.edu' ORDER BY id LIMIT 1"
     ), {"c": correo})).scalar()
 
 
