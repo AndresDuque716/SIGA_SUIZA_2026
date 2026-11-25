@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { apiClient } from '../../core/api/client';
 import { useToast } from '../../core/ui/ToastContext';
-import { X, Calendar, Plus, Clock, Pencil } from 'lucide-react';
+import { useConfirm } from '../../core/ui/ConfirmModal';
+import { X, Calendar, Plus, Clock, Pencil, Trash2 } from 'lucide-react';
 
 const PERIODO_VACIO = {
   codigo: '',
@@ -17,6 +18,8 @@ const formatoFecha = (v) => (v ? soloFecha(v).split('-').reverse().join('/') : '
 
 export function PeriodManager({ onClose, onUpdate }) {
   const toast = useToast();
+  const confirmar = useConfirm();
+  const [eliminandoId, setEliminandoId] = useState(null);
   const [periods, setPeriods] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -36,6 +39,29 @@ export function PeriodManager({ onClose, onUpdate }) {
     });
   };
   const cancelarEdicion = () => { setEditando(null); setNewPeriod(PERIODO_VACIO); };
+
+  // Solo se eliminan periodos sin datos (el servidor lo verifica y explica qué tiene si no se puede)
+  const eliminarPeriodo = async (period) => {
+    const ok = await confirmar({
+      title: 'Eliminar periodo',
+      message: `¿Eliminar el periodo ${period.codigo}? Solo se puede si aún no tiene matrículas, notas, carga lectiva ni otros datos. No se puede deshacer.`,
+      type: 'danger',
+      confirmText: 'Sí, eliminar',
+    });
+    if (!ok) return;
+    setEliminandoId(period.id);
+    try {
+      await apiClient.request(`/api/mod-programas-estudio/periodos/${period.id}`, { method: 'DELETE' });
+      toast.success(`Periodo ${period.codigo} eliminado.`);
+      if (editando?.id === period.id) cancelarEdicion();
+      await fetchPeriods();
+      if (onUpdate) onUpdate();
+    } catch (err) {
+      toast.error(err.message || 'No se pudo eliminar el periodo.');
+    } finally {
+      setEliminandoId(null);
+    }
+  };
 
   const fetchPeriods = async () => {
     setLoading(true);
@@ -322,6 +348,14 @@ export function PeriodManager({ onClose, onUpdate }) {
                             className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-semibold text-primary hover:underline"
                           >
                             <Pencil size={11} /> Editar fechas
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => eliminarPeriodo(period)}
+                            disabled={eliminandoId === period.id}
+                            className="mt-1.5 ml-3 inline-flex items-center gap-1 text-[11px] font-semibold text-red-600 hover:underline disabled:opacity-50"
+                          >
+                            <Trash2 size={11} /> {eliminandoId === period.id ? 'Eliminando…' : 'Eliminar periodo'}
                           </button>
                         </div>
                       </div>

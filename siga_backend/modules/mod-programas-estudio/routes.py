@@ -171,6 +171,53 @@ async def actualizar_fechas_periodo(periodo_id: int, fechas: PeriodoFechasUpdate
     return db_periodo
 
 
+@router.delete("/periodos/{periodo_id}")
+async def eliminar_periodo(periodo_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+    """Elimina un periodo SOLO si no tiene datos asociados. Si ya tiene matrículas, notas, carga
+    lectiva, etc., no se borra (quedarían registros sueltos) y se informa qué tiene."""
+    ident = await get_identity(request, db)
+    if not (es_superadmin(ident) or set(ident.roles) & ROLES_CALENDARIO):
+        raise HTTPException(status_code=403, detail="No tiene permisos para modificar el calendario académico.")
+
+    db_periodo = (await db.execute(select(PeriodoAcademico).where(PeriodoAcademico.id == periodo_id))).scalar_one_or_none()
+    if not db_periodo:
+        raise HTTPException(status_code=404, detail="Periodo no encontrado")
+
+    dependencias = [
+        ("matriculas", "matrícula(s)"),
+        ("evaluacion_registros", "nota(s) registrada(s)"),
+        ("carga_lectiva", "asignación(es) de carga lectiva"),
+        ("historial_academico", "registro(s) de historial académico"),
+        ("horarios_periodo", "horario(s)"),
+        ("planes_trabajo_docente", "plan(es) de trabajo docente"),
+        ("tutorias", "tutoría(s)"),
+    ]
+    encontrados = []
+    for tabla, etiqueta in dependencias:
+        try:
+            n = (await db.execute(text(f"SELECT count(*) FROM {tabla} WHERE periodo_id = :p"), {"p": periodo_id})).scalar() or 0
+        except Exception:
+            await db.rollback()  # la tabla puede no existir en una base nueva
+            n = 0
+        if n:
+            encontrados.append(f"{n} {etiqueta}")
+    if encontrados:
+        raise HTTPException(
+            status_code=409,
+            detail=(f"No se puede eliminar el periodo {db_periodo.codigo} porque ya tiene: {', '.join(encontrados)}. "
+                    "Solo se pueden eliminar periodos sin datos. Si ya no se usa, cámbielo a estado «histórico».")
+        )
+
+    codigo = db_periodo.codigo
+    await db.delete(db_periodo)
+    db.add(OutboxEvent(event_type="periodo.eliminado", payload={
+        "id": periodo_id, "codigo": codigo,
+        "metadata": {"request_id": request.headers.get("X-Request-ID", "unknown")},
+    }))
+    await db.commit()
+    return {"message": f"Periodo {codigo} eliminado"}
+
+
 @router.get("/periodos", response_model=List[PeriodoResponse])
 async def obtener_periodos(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(PeriodoAcademico).order_by(PeriodoAcademico.fecha_inicio.desc()))
