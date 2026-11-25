@@ -40,6 +40,9 @@ export function EnrollmentDashboard() {
   const [periodoMatricula, setPeriodoMatricula] = useState('');
   // Secretaría de Programa trabaja solo con su carrera; el resto elige.
   const carreraFija = userRole === 'secretaria_programa' && user?.programa_id != null;
+  // El administrador ve todo el padrón: tiene la opción «Todos los periodos» y entra con ella.
+  const esAdmin = !!user?.is_superuser || userRoles.some(r => ['superadmin', 'admin'].includes(r));
+  const TODOS = 'TODOS';
 
 
   // La lista se descarga una vez (al entrar o al cambiar de carrera) y la búsqueda filtra en el
@@ -55,7 +58,7 @@ export function EnrollmentDashboard() {
     try {
       const params = new URLSearchParams();
       if (currentPrograma && currentPrograma !== 'ALL') params.set('programa_id', currentPrograma);
-      if (periodoMatricula) params.set('periodo_id', periodoMatricula);
+      if (periodoMatricula && periodoMatricula !== TODOS) params.set('periodo_id', periodoMatricula);
       const url = `${API_BASE}/api/mod-gestion-academica/estudiantes/${params.toString() ? `?${params}` : ''}`;
 
       const response = await fetch(url, {
@@ -82,10 +85,12 @@ export function EnrollmentDashboard() {
         const orden = [...data].sort((a, b) => String(b.fecha_inicio || b.codigo).localeCompare(String(a.fecha_inicio || a.codigo)));
         setPeriodos(orden);
         const abierto = orden.find(p => ['matricula_abierta', 'en_curso'].includes(p.estado)) || orden[0];
-        if (abierto) setPeriodoMatricula(String(abierto.id));
+        if (esAdmin) setPeriodoMatricula(TODOS);
+        else if (abierto) setPeriodoMatricula(String(abierto.id));
       })
       .catch(err => console.error('No se pudieron cargar los periodos:', err));
     return () => { activo = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -243,6 +248,11 @@ export function EnrollmentDashboard() {
         chips={['Consulta', 'Búsqueda', 'Matrícula']}
       />
 
+      {periodoMatricula === TODOS && (
+        <div className="mb-3 max-w-3xl text-xs text-slate-600 bg-white/70 border border-slate-200 rounded-xl px-4 py-2 leading-relaxed">
+          <b>Todos los periodos</b>: se muestran <b>todos los estudiantes</b> registrados. Elige un periodo para ver solo los habilitados para matricularse en él.
+        </div>
+      )}
       {periodoActual && (
         <div className="mb-3 max-w-3xl text-xs text-slate-600 bg-white/70 border border-slate-200 rounded-xl px-4 py-2 leading-relaxed">
           Periodo <b>{periodoActual.codigo}</b>: se muestran los alumnos <b>históricos</b> (ya estudiaron antes)
@@ -256,6 +266,7 @@ export function EnrollmentDashboard() {
           onChange={(e) => setPeriodoMatricula(e.target.value)}
           title="Periodo de matrícula"
         >
+          {esAdmin && <option value={TODOS}>Todos</option>}
           {periodos.map(p => (
             <option key={p.id} value={p.id}>{p.codigo}</option>
           ))}
