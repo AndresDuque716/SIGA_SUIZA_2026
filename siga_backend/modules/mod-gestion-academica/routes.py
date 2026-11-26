@@ -354,6 +354,47 @@ async def actualizar_pago_matricula(estudiante_id: int, request: Request, pagado
     await db.refresh(estudiante)
     return estudiante
 
+@router.post("/estudiantes/cuentas/sincronizar")
+async def sincronizar_cuentas_alumnos(simular: bool = True, i=Depends(identidad), db: AsyncSession = Depends(get_db)):
+    """Crea o reactiva la cuenta DNI@siga.edu de los alumnos ya matriculados que no la tengan.
+
+    Es la misma regla de la matrícula (cuenta_estudiante.py), para los alumnos matriculados antes
+    de que existiera. Solo admin/superadmin. Con simular=true (por defecto) solo lista, no cambia nada.
+    """
+    from seguridad import _tiene_rol
+    from cuenta_estudiante import asegurar_cuenta_estudiante, correo_alumno
+    if not _tiene_rol(i, {"admin"}):
+        raise HTTPException(status_code=403, detail="Solo el administrador puede sincronizar cuentas de alumnos.")
+
+    ids = (await db.execute(text(
+        "SELECT DISTINCT estudiante_id FROM matriculas "
+        "WHERE coalesce(estado_matricula, '') NOT IN ('anulada', 'cancelada')"
+    ))).scalars().all()
+    estudiantes = (await db.execute(select(Estudiante).where(Estudiante.id.in_(ids)))).scalars().all() if ids else []
+
+    resultado = []
+    for est in estudiantes:
+        correo = correo_alumno(est.dni)
+        if not correo:
+            resultado.append({"estudiante_id": est.id, "usuario": None, "accion": "sin DNI"})
+            continue
+        fila = (await db.execute(
+            text("SELECT u.is_active, EXISTS(SELECT 1 FROM core_user_roles ur JOIN core_roles r ON r.id = ur.role_id "
+                 "WHERE ur.user_id = u.id AND r.name = 'estudiante') FROM core_users u WHERE lower(u.email) = :c"),
+            {"c": correo},
+        )).first()
+        if fila and fila[0] and fila[1] and (est.email_institucional or "").strip():
+            continue  # ya está bien conectado
+        accion = "crear" if not fila else ("reactivar" if not fila[0] else "completar")
+        if not simular:
+            await asegurar_cuenta_estudiante(db, est)
+        resultado.append({"estudiante_id": est.id, "nombre": f"{est.nombres or ''} {est.apellidos or ''}".strip(),
+                          "usuario": correo, "accion": accion})
+    if not simular:
+        await db.commit()
+    return {"simulado": simular, "matriculados": len(estudiantes), "cambios": resultado}
+
+
 @router.get("/estudiantes/mi-ficha")
 async def mi_ficha(i=Depends(identidad), db: AsyncSession = Depends(get_db)):
     """Ficha del alumno que inició sesión (se enlaza por correo). El estudiante ya no necesita
