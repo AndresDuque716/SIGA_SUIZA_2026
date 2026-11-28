@@ -169,6 +169,27 @@ async def ingesta_admitidos(request: Request, data: IngestaMasivaRequest, db: As
     await db.commit()
     return {"message": "Ingesta procesada", "estudiantes_creados": estudiantes_creados}
 
+async def _verificar_email_institucional(db, email, excluir_id=None):
+    """El correo institucional no puede repetirse (restricción única en la BD).
+
+    Sin esta verificación, un correo ya usado por otro alumno hacía fallar el guardado con
+    "Internal Server Error" (error 500) en vez de un mensaje claro.
+    """
+    correo = (email or "").strip()
+    if not correo:
+        return
+    q = select(Estudiante).where(Estudiante.email_institucional.ilike(correo))
+    if excluir_id is not None:
+        q = q.where(Estudiante.id != excluir_id)
+    otro = (await db.execute(q)).scalars().first()
+    if otro:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Este usuario ya existe: el email institucional {correo} ya lo tiene "
+                   f"{otro.nombres} {otro.apellidos} (código {otro.codigo_estudiante}). Intente con otro.",
+        )
+
+
 @router.post("/estudiantes/", response_model=EstudianteResponse, status_code=status.HTTP_201_CREATED)
 async def crear_estudiante(request: Request, data: EstudianteCreate, db: AsyncSession = Depends(get_db)):
     def _norm(t):
@@ -189,6 +210,8 @@ async def crear_estudiante(request: Request, data: EstudianteCreate, db: AsyncSe
             detail=f"El DNI {data.dni} ya está registrado para {por_dni.nombres} {por_dni.apellidos} "
                    f"(código {por_dni.codigo_estudiante}).",
         )
+
+    await _verificar_email_institucional(db, data.email_institucional)
 
     datos = data.model_dump()
     codigo_ocupado = (await db.execute(
@@ -811,6 +834,8 @@ async def actualizar_estudiante(estudiante_id: int, data: EstudianteUpdate, requ
         raise HTTPException(status_code=404, detail="Estudiante no encontrado")
 
     update_data = data.model_dump(exclude_unset=True)
+    if "email_institucional" in update_data:
+        await _verificar_email_institucional(db, update_data["email_institucional"], excluir_id=estudiante_id)
     for key, value in update_data.items():
         setattr(db_estudiante, key, value)
 
